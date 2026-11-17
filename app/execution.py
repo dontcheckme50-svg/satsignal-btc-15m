@@ -1,0 +1,92 @@
+import math
+from app.config import settings
+from app.database import PredictionLedger
+from app.feeds import MarketDataHub, iso_now
+from app.models import ContractInfo, FinalDecisionReport, Signal, TradeRecord
+
+
+def kalshi_taker_fee(price: float) -> float:
+    # Kalshi fee estimate in USD per contract; verify current fee schedule before live use.
+    return math.ceil(0.07 * price * (1.0 - price) * 100.0) / 100.0
+
+
+class ExecutionManager:
+    """Paper-only simulator. It never submits live/demo orders."""
+
+    def __init__(self, hub: MarketDataHub, ledger: PredictionLedger):
+        self.hub = hub
+        self.ledger = ledger
+        self.max_contracts_per_window = 20
+
+    async def evaluate_and_execute(
+        self,
+        now: float,
+        contract: ContractInfo,
+        decision: FinalDecisionReport,
+        baseline_z_prob: float | None = None,
+    ) -> TradeRecord | None:
+        # Hard safety gates: no synthetic contracts, no proxy quotes, no live mode.
+        if settings.trading_mode != "paper":
+            return None
+        if not contract.is_official_kalshi:
+            return None
+        if not contract.ticker.startswith("KXBTC15M"):
+            return None
+        if contract.strike_source != "KALSHI_OFFICIAL":
+            return None
+        if decision.signal == Signal.WAIT:
+            return None
+        if contract.seconds_remaining < settings.final_lockout_seconds:
+            return None
+
+        sb = self.ledger.get_scoreboard()
+        if sb.daily_loss_locked:
+            return None
+
+        # Only one paper entry per contract prevents repeated per-second orders.
+        if self.ledger.count_open_contracts_for_ticker(contract.ticker) > 0:
+            return None
+
+        side = "YES" if decision.signal == Signal.UP else "NO"
+        fair_prob = decision.up_probability if side == "YES" else decision.down_probability
+        ask = contract.yes_ask_dollars if side == "YES" else contract.no_ask_dollars
+
+        # Never invent a fill price from the model's own probability.
+        if ask is None or not (0.01 <= ask <= 0.99):
+            return None
+
+        ask_price = round(float(ask), 2)
+        fee_per_contract = kalshi_taker_fee(ask_price)
+        total_cost = ask_price + fee_per_contract
+        net_edge = round(fair_prob - total_cost, 4)
+        if net_edge < settings.min_net_edge_cents or total_cost >= 0.99:
+            return None
+
+        full_kelly = max(0.0, (fair_prob - total_cost) / (1.0 - total_cost))
+        wager = min(
+            sb.bankroll_usd * full_kelly * settings.kelly_fraction,
+            settings.max_risk_per_trade_usd,
+        )
+        qty = min(
+            max(0, int(wager // total_cost)),
+            self.max_contracts_per_window,
+        )
+        if qty <= 0:
+            return None
+
+        rec = TradeRecord(
+            mode="paper",
+            contract_ticker=contract.ticker,
+            timestamp_iso=iso_now(now),
+            side=side,
+            contracts=qty,
+            entry_price=ask_price,
+            quote_source="KALSHI_LIVE_BOOK",
+            fee_paid=round(fee_per_contract * qty, 4),
+            fair_prob_at_entry=fair_prob,
+            net_edge=net_edge,
+            status="OPEN",
+            notes="Paper-only simulated fill using observed Kalshi ask; no order submitted.",
+        )
+        rec.id = self.ledger.record_trade(rec)
+        return rec
