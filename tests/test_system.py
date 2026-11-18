@@ -408,3 +408,29 @@ def test_brti_parser_rejects_nonfinite_and_nonpositive_values():
     assert hub._parse_brti_value(float("inf")) is None
     assert hub._parse_brti_value("-1") is None
     assert hub._parse_brti_value("invalid") is None
+
+
+
+def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch):
+    from app.orchestrator import PredictorOrchestrator
+
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_trade(now, 90000.0, 0.2, False, "TEST")
+    hub.bars_1s.extend([
+        (int(now - 5), 89999.0, 0.1),
+        (int(now + 100), 999999.0, 100.0),
+    ])
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger(":memory:"))
+    captured = {}
+    original = orchestrator.regime_engine.analyze
+
+    def spy(evidence, weakness, bars):
+        captured["bars"] = list(bars)
+        return original(evidence, weakness, bars)
+
+    monkeypatch.setattr(orchestrator.regime_engine, "analyze", spy)
+    orchestrator.evaluate_once(now=now, record_to_db=False)
+
+    assert captured["bars"]
+    assert all(bar[0] <= now for bar in captured["bars"])
