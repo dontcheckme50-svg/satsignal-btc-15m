@@ -150,4 +150,3 @@ def test_market_data_readiness_degrades_when_order_book_is_stale():
     assert health["market_data_health"] == "DEGRADED"
     assert health["market_data_ready"] is False
     assert health["order_book_age_seconds"] >= 60.0
-\n
