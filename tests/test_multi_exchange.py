@@ -148,3 +148,12 @@ def test_aggregate_cross_venue_flow_sums_btc_delta():
     assert snapshot["trade_flow"]["windows"]["15"]["sell_volume_btc"] == 0.2
     assert snapshot["trade_flow"]["windows"]["15"]["delta_btc"] == 0.2
     assert snapshot["trade_flow"]["windows"]["15"]["delta_ratio"] == 0.333333
+
+
+
+def test_coinbase_maker_side_is_inverted_to_aggressor_side():
+    reference = MultiExchangeReference()
+
+    assert reference._coinbase_aggressor_side("buy") == "sell"
+    assert reference._coinbase_aggressor_side("sell") == "buy"
+    assert reference._coinbase_aggressor_side(None) == "unknown"
