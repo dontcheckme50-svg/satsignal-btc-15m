@@ -34,6 +34,8 @@ def test_multi_exchange_reference_history_persists_and_calculates_basis(tmp_path
     row = history[0]
     assert row["reference_status"] == "LIVE"
     assert row["reference_price"] == 90000.0
+    assert row["primary_spot_age_seconds"] == 0.3
+    assert row["official_brti_age_seconds"] == 0.4
     assert row["ref_vs_primary_bps"] == 1.1112
     assert row["ref_vs_brti_bps"] == 2.2227
     assert row["included_venues"] == ["COINBASE", "KRAKEN", "BITSTAMP"]
