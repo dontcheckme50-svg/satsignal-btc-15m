@@ -185,35 +185,35 @@ class MultiExchangeReference:
         now = now or time.time()
         venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.binance.snapshot(now)]
         live = [v for v in venues if v["status"] == "LIVE" and v["mid"] is not None]
-        prices = [v["mid"] for v in live]
+        usd_live = [v for v in live if v["quote"] == "USD"]
+        prices = [v["mid"] for v in usd_live]
         composite = None
         excluded = []
+        accepted = []
         if prices:
             sorted_prices = sorted(prices)
             median = sorted_prices[len(sorted_prices) // 2] if len(sorted_prices) % 2 else sum(sorted_prices[len(sorted_prices)//2-1:len(sorted_prices)//2+1]) / 2
-            accepted = [v for v in live if abs(v["mid"] - median) / median <= 0.0035]
-            excluded = [v["venue"] for v in live if v not in accepted]
-            # Weight each accepted venue by usable quote depth, capped to prevent one venue dominating.
-            weights = []
-            for v in accepted:
-                depth = max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0))
-                weights.append(depth)
+            accepted = [v for v in usd_live if abs(v["mid"] - median) / median <= 0.0035]
+            excluded = [v["venue"] for v in usd_live if v not in accepted]
+            # Weight accepted USD venues by near-market quote depth, capped to prevent one venue dominating.
+            weights = [max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0)) for v in accepted]
             if accepted:
                 composite = sum(v["mid"] * w for v, w in zip(accepted, weights)) / sum(weights)
-        total_bid_depth = sum(v["bid_depth"] for v in live)
-        total_ask_depth = sum(v["ask_depth"] for v in live)
+        total_bid_depth = sum(v["bid_depth_25bps"] for v in accepted)
+        total_ask_depth = sum(v["ask_depth_25bps"] for v in accepted)
         imbalance = (total_bid_depth - total_ask_depth) / (total_bid_depth + total_ask_depth) if total_bid_depth + total_ask_depth else None
         return {
             "timestamp": now,
-            "status": "LIVE" if len(live) >= 2 and composite is not None else ("PARTIAL" if live else "UNAVAILABLE"),
+            "status": "LIVE" if len(accepted) >= 2 and composite is not None else ("PARTIAL" if usd_live else "UNAVAILABLE"),
             "reference_price": composite,
             "venue_count_live": len(live),
+            "usd_venue_count_live": len(usd_live),
             "venue_count_required": 2,
-            "included_venues": [v["venue"] for v in live if v["venue"] not in excluded],
+            "included_venues": [v["venue"] for v in accepted],
             "outlier_venues": excluded,
             "venues": venues,
-            "consolidated_bid_depth_usd": total_bid_depth,
-            "consolidated_ask_depth_usd": total_ask_depth,
+            "consolidated_bid_depth_usd_within_25bps": total_bid_depth,
+            "consolidated_ask_depth_usd_within_25bps": total_ask_depth,
             "consolidated_imbalance": imbalance,
-            "method": "Median outlier filter (0.35%), then capped depth-weighted mid-price; shadow-mode estimate, not CF Benchmarks BRTI.",
+            "method": "USD venues only: median outlier filter (0.35%), then capped depth-weighted mid-price; shadow-mode estimate, not CF Benchmarks BRTI.",
         }
