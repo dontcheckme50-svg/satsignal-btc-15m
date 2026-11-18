@@ -241,6 +241,36 @@ class PredictionLedger:
             for r in rows
         ]
 
+    def get_brti_cohort_report(self) -> dict:
+        """Compare settled BRTI cohorts with the overall official directional-lock baseline."""
+        cohorts = self.get_brti_cohort_performance()
+        with self._connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS settled,
+                   SUM(CASE WHEN final_won = 1 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN final_won = 0 THEN 1 ELSE 0 END) AS losses
+                   FROM predictions
+                   WHERE is_official_lock = 1 AND settled = 1
+                     AND final_signal IN ('UP', 'DOWN') AND final_won IS NOT NULL"""
+            ).fetchone()
+        settled = int(row["settled"] or 0)
+        wins = int(row["wins"] or 0)
+        baseline_accuracy = round(wins / settled * 100.0, 2) if settled else None
+        for cohort in cohorts:
+            cohort["vs_baseline_pct_points"] = (
+                round(cohort["accuracy_pct"] - baseline_accuracy, 2)
+                if baseline_accuracy is not None else None
+            )
+        return {
+            "baseline": {
+                "settled": settled, "wins": wins,
+                "losses": int(row["losses"] or 0),
+                "accuracy_pct": baseline_accuracy,
+            },
+            "cohorts": cohorts,
+            "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
+        }
+
     def has_official_prediction_lock(self, contract_ticker: str) -> bool:
         with self._connection() as conn:
             row = conn.execute(
