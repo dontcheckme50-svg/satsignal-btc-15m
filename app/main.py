@@ -202,6 +202,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
       <div class="kv"><span>Reference vs Primary Spot</span><span id="mx-primary-diff">--</span></div>
       <div class="kv"><span>Reference vs Official BRTI</span><span id="mx-brti-diff">--</span></div>
+      <div class="kv"><span>Reference vs Contract Strike</span><span id="mx-strike-diff">--</span></div>
       <div class="rationale" id="mx-method">Independent reference. Does not influence predictions.</div>
     </div>
 
@@ -297,6 +298,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
       document.getElementById("mx-primary-diff").textContent = m.reference_vs_primary_bps == null ? "--" : (m.reference_vs_primary_bps>0?"+":"")+m.reference_vs_primary_bps.toFixed(2)+" bps";
       document.getElementById("mx-brti-diff").textContent = m.reference_vs_brti_bps == null ? "--" : (m.reference_vs_brti_bps>0?"+":"")+m.reference_vs_brti_bps.toFixed(2)+" bps";
+      document.getElementById("mx-strike-diff").textContent = m.reference_vs_strike_bps == null ? "--" : (m.reference_vs_strike_bps>0?"+":"")+m.reference_vs_strike_bps.toFixed(2)+" bps";
       document.getElementById("mx-method").textContent = m.method;
     } catch(e) {}
   }
