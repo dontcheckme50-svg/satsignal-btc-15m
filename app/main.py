@@ -205,6 +205,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <h3>Multi-Exchange Reference <span id="mx-status" style="color:var(--wait)">SHADOW / WAITING</span></h3>
       <div class="kv"><span>Consolidated USD Reference</span><span id="mx-price">Waiting for 2 USD venues</span></div>
       <div class="kv"><span>Contributing Venues</span><span id="mx-venues">--</span></div>
+      <div class="kv"><span>Individual Venue Health</span><span id="mx-venue-health">--</span></div>
       <div class="kv"><span>Bid Liquidity (±0.25%)</span><span id="mx-bid-depth">--</span></div>
       <div class="kv"><span>Ask Liquidity (±0.25%)</span><span id="mx-ask-depth">--</span></div>
       <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
@@ -304,6 +305,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       statusEl.style.color = m.status === "LIVE" ? "var(--up)" : "var(--wait)";
       document.getElementById("mx-price").textContent = m.reference_price != null ? fmtUSD(m.reference_price) : "Waiting for 2 USD venues";
       document.getElementById("mx-venues").textContent = `${(m.included_venues||[]).join(", ")||"--"} (${m.usd_venue_count_live||0}/2 USD feeds)`;
+      document.getElementById("mx-venue-health").textContent = (m.venues||[]).map(v => `${v.venue}: ${v.status}${v.connected ? " [socket]" : ""}${v.age_seconds!=null ? " "+Number(v.age_seconds).toFixed(1)+"s" : ""}`).join(" | ") || "--";
       document.getElementById("mx-bid-depth").textContent = fmtUSD(m.consolidated_bid_depth_usd_within_25bps||0);
       document.getElementById("mx-ask-depth").textContent = fmtUSD(m.consolidated_ask_depth_usd_within_25bps||0);
       document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
