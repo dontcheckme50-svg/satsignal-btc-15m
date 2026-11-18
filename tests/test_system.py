@@ -1164,6 +1164,14 @@ def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks
         "cohort": "DISAGREE", "settled": 1, "wins": 0, "losses": 1, "accuracy_pct": 0.0
     }
     assert "BRTI_UNAVAILABLE" not in stats
+    report = ledger.get_brti_cohort_report()
+    assert report["baseline"] == {
+        "settled": 2, "wins": 1, "losses": 1, "accuracy_pct": 50.0
+    }
+    report_rows = {row["cohort"]: row for row in report["cohorts"]}
+    assert report_rows["AGREE_UP"]["vs_baseline_pct_points"] == 50.0
+    assert report_rows["DISAGREE"]["vs_baseline_pct_points"] == -50.0
+    assert "not proof of predictive lift" in report["interpretation"]
 
 @pytest.mark.parametrize(
     "brti_mode,expected_cohort",
@@ -1216,12 +1224,17 @@ def test_brti_cohort_api_returns_settled_performance(monkeypatch):
     expected = [
         {"cohort": "AGREE_UP", "settled": 8, "wins": 6, "losses": 2, "accuracy_pct": 75.0}
     ]
+    expected_report = {
+        "baseline": {"settled": 20, "wins": 12, "losses": 8, "accuracy_pct": 60.0},
+        "cohorts": expected,
+        "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
+    }
     monkeypatch.setattr(
-        main_module.ledger, "get_brti_cohort_performance", lambda: expected
+        main_module.ledger, "get_brti_cohort_report", lambda: expected_report
     )
     response = TestClient(main_module.app).get("/api/brti-cohorts")
     assert response.status_code == 200
-    assert response.json() == {"cohorts": expected}
+    assert response.json() == expected_report
 
 @pytest.mark.parametrize(
     "brti_mode,expected_cohort",
