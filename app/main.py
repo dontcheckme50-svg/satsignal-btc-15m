@@ -153,7 +153,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .kv { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:.84rem; gap:8px; }
   .kv:last-child { border-bottom:none; } .kv span:first-child { color:var(--muted); } .kv span:last-child { font-weight:600; text-align:right; }
   .feed-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-  .st-LIVE,.st-ACTIVE,.st-ACTIVE_WINDOW { background:var(--up); } .st-FALLBACK,.st-MONITORING { background:var(--wait); } .st-STALE,.st-UNAVAILABLE,.st-DEGRADED_FEED,.st-SOURCE_MISMATCH { background:var(--down); }
+  .st-LIVE,.st-ACTIVE,.st-ACTIVE_WINDOW,.st-RUNNING { background:var(--up); } .st-FALLBACK,.st-MONITORING,.st-RESTARTING { background:var(--wait); } .st-STALE,.st-UNAVAILABLE,.st-DEGRADED_FEED,.st-SOURCE_MISMATCH,.st-STOPPED { background:var(--down); }
   table { width:100%; border-collapse:separate; border-spacing:0; font-size:.8rem; } th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); white-space:nowrap; } th { position:sticky; top:0; z-index:2; background:#182234; color:#b9c8dc; font-size:.74rem; text-transform:uppercase; letter-spacing:.04em; } tbody tr:hover { background:rgba(56,189,248,.055); }
   .table-wrap { overflow-x:auto; } .rationale { margin-top:10px; font-size:.82rem; color:#cbd5e1; line-height:1.4; } a.api-link { color:#38bdf8; text-decoration:none; font-weight:600; }
 </style>
