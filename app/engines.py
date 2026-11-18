@@ -9,14 +9,15 @@ class EvidenceEngine:
     def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
-        recent_trades = [t for t in trades if now - t[0] <= 60.0]
+        recent_trades = [t for t in trades if now - 60.0 <= t[0] <= now]
         buy_vol_60s = sum(t[2] for t in recent_trades if not t[3])
         sell_vol_60s = sum(t[2] for t in recent_trades if t[3])
         tot_vol_60s = buy_vol_60s + sell_vol_60s
         buy_pct, sell_pct = (round((buy_vol_60s / tot_vol_60s) * 100.0, 1), round((sell_vol_60s / tot_vol_60s) * 100.0, 1)) if tot_vol_60s > 0 else (50.0, 50.0)
         delta_60s = round(buy_vol_60s - sell_vol_60s, 4)
-        cvd = sum((t[2] if not t[3] else -t[2]) for t in trades if t[0] >= contract.open_timestamp)
-        trades_10m = [t for t in trades if now - t[0] <= 600.0]
+        # Only use observed trades within this contract and at/before the snapshot time.
+        cvd = sum((t[2] if not t[3] else -t[2]) for t in trades if contract.open_timestamp <= t[0] <= now)
+        trades_10m = [t for t in trades if now - 600.0 <= t[0] <= now]
         avg_1m_vol = (sum(t[2] for t in trades_10m) / 10.0) if trades_10m else 0.0
         vol_ratio = round(tot_vol_60s / avg_1m_vol, 2) if avg_1m_vol > 1e-6 else 1.0
         bid_depth, ask_depth = sum(q for _, q in bids[:10]), sum(q for _, q in asks[:10])
@@ -26,7 +27,9 @@ class EvidenceEngine:
         large_bids = sum(q for _, q in bids[:10] if med_sz > 0 and q >= 2.5 * med_sz)
         large_asks = sum(q for _, q in asks[:10] if med_sz > 0 and q >= 2.5 * med_sz)
         large_bias = (large_bids - large_asks) / (large_bids + large_asks) if (large_bids + large_asks) > 0 else 0.0
-        prices = [b[1] for b in bars_1s[-300:]] + [live_price]
+        # Exclude future-dated bars from momentum/volatility calculations.
+        valid_bars = [b for b in bars_1s if b[0] <= now]
+        prices = [b[1] for b in valid_bars[-300:]] + [live_price]
         rsi_14 = self._compute_rsi(prices[-60:], period=14)
         ann_vol = self._compute_annualized_vol(prices)
         p_30s = prices[-30] if len(prices) >= 30 else prices[0]
