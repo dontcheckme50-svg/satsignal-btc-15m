@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding
 from app.config import settings
 from app.models import ContractInfo, FeedStatus
+from app.multi_exchange import MultiExchangeReference
 
 def iso_now(ts: Optional[float] = None) -> str:
     t = ts if ts is not None else time.time()
@@ -33,6 +34,7 @@ class MarketDataHub:
         self.brti_detail: str = "No Kalshi/CFB BRTI entitlement configured"
         self._running = False
         self._tasks = []
+        self.multi_exchange = MultiExchangeReference()
         self._private_key = self._load_kalshi_key()
 
     def _load_kalshi_key(self):
@@ -77,6 +79,7 @@ class MarketDataHub:
         if self._running:
             return
         self._running = True
+        await self.multi_exchange.start()
         self._tasks = [
             asyncio.create_task(self._spot_stream_loop(), name="spot-feed"),
             asyncio.create_task(self._kalshi_market_loop(), name="kalshi-feed"),
@@ -91,6 +94,11 @@ class MarketDataHub:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        await self.multi_exchange.stop()
+
+    def get_multi_exchange_snapshot(self) -> dict:
+        self.multi_exchange.ingest_binance(self.live_price, list(self.bids), list(self.asks), self.last_spot_ts)
+        return self.multi_exchange.get_snapshot()
 
     async def fetch_verified_kalshi_settlement(self, ticker: str) -> Optional[Tuple[str, Optional[float]]]:
         if not ticker.startswith("KXBTC15M"):
@@ -246,9 +254,25 @@ class MarketDataHub:
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
         )
         brti_age = round(now - self.last_brti_ts, 2) if self.last_brti_ts else None
+        multi = self.get_multi_exchange_snapshot()
+        venue_statuses = []
+        for venue in multi.get("venues", []):
+            venue_statuses.append(FeedStatus(
+                name=f"Multi-Exchange {venue['venue']}",
+                status=venue["status"],
+                age_seconds=venue.get("age_seconds"),
+                detail=f"Quote={venue['quote']} | mid={venue.get('mid')} | imbalance={venue.get('imbalance')} | {venue.get('last_error') or ''}",
+            ))
+        venue_statuses.append(FeedStatus(
+            name="Multi-Exchange Reference",
+            status=multi["status"],
+            last_updated_iso=iso_now(multi["timestamp"]),
+            age_seconds=0.0,
+            detail=f"Reference={multi.get('reference_price')} | live venues={multi['venue_count_live']} | outliers={multi['outlier_venues']}",
+        ))
         return [
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts else None, age_seconds=spot_age, detail=self.active_spot_source),
             FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels"),
             FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts else None, age_seconds=kalshi_age, detail=self.kalshi_status_detail),
             FeedStatus(name="CF Benchmarks BRTI", status=self.brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
-        ]
+        ] + venue_statuses
