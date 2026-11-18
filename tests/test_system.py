@@ -287,3 +287,47 @@ def test_feed_status_marks_future_timestamps_invalid():
     assert statuses["Primary Spot Feed"] == "FUTURE_TIMESTAMP"
     assert statuses["Order Book Depth"] == "FUTURE_TIMESTAMP"
     assert statuses["CF Benchmarks BRTI"] == "FUTURE_TIMESTAMP"
+
+
+def test_ingest_trade_rejects_invalid_and_future_market_data():
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_trade(now, 90000.0, 0.25, False, "TEST")
+    baseline = (hub.live_price, hub.last_spot_ts, len(hub.trades), hub._current_sec_vol)
+
+    hub.ingest_trade(now + 5.0, 999999.0, 10.0, False, "TEST")
+    hub.ingest_trade(now + 0.1, float("nan"), 1.0, False, "TEST")
+    hub.ingest_trade(now + 0.1, 90001.0, float("inf"), False, "TEST")
+    hub.ingest_trade(now + 0.1, 90001.0, -1.0, False, "TEST")
+    hub.ingest_trade(now + 0.1, 90001.0, 1.0, "not-bool", "TEST")
+    hub.ingest_trade(now - 1.0, 80000.0, 1.0, False, "TEST")
+
+    assert (hub.live_price, hub.last_spot_ts, len(hub.trades), hub._current_sec_vol) == baseline
+
+
+def test_ingest_book_rejects_crossed_invalid_and_future_books():
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_book(now, [(89999.0, 2.0)], [(90001.0, 3.0)])
+    baseline = (list(hub.bids), list(hub.asks), hub.last_book_ts)
+
+    hub.ingest_book(now + 5.0, [(90010.0, 1.0)], [(90011.0, 1.0)])
+    hub.ingest_book(now + 0.1, [(90002.0, 1.0)], [(90001.0, 1.0)])
+    hub.ingest_book(now + 0.1, [(float("nan"), 1.0)], [(90001.0, 1.0)])
+    hub.ingest_book(now - 1.0, [(90002.0, 1.0)], [(90003.0, 1.0)])
+
+    assert (hub.bids, hub.asks, hub.last_book_ts) == baseline
+
+
+@pytest.mark.asyncio
+async def test_synthetic_contracts_are_not_settled_with_later_fallback_price(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "synthetic-unsettled.db"))
+    ledger.record_prediction(_prediction_record("SYNTH-BTC15M-OLD"))
+    orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
+
+    await orchestrator.reconcile_unsettled_contracts("SYNTH-BTC15M-NEW", fallback_price=99999.0)
+
+    pending = ledger.get_recent_predictions(limit=10)
+    assert pending[0].settled is False
+    assert pending[0].settlement_source is None
+    assert ledger.get_scoreboard().pending_predictions == 1
