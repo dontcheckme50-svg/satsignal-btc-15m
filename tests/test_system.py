@@ -1287,10 +1287,15 @@ def test_brti_cohort_api_returns_settled_performance(monkeypatch):
     expected = [
         {"cohort": "AGREE_UP", "settled": 8, "wins": 6, "losses": 2, "accuracy_pct": 75.0}
     ]
+    expected_report = {
+        "baseline": {"settled": 20, "wins": 12, "losses": 8, "accuracy_pct": 60.0},
+        "cohorts": expected,
+        "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
+    }
     monkeypatch.setattr(
-        main_module.ledger, "get_brti_cohort_performance", lambda: expected
+        main_module.ledger, "get_brti_cohort_report", lambda: expected_report
     )
     response = TestClient(main_module.app).get("/api/brti-cohorts")
     assert response.status_code == 200
-    assert response.json() == {"cohorts": expected}
+    assert response.json() == expected_report
 
