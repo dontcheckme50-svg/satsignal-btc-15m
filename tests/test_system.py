@@ -141,6 +141,10 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
     assert snapshot is not None
     assert snapshot.contract.is_official_kalshi is False
     assert ledger.get_recent_predictions() == []
+    shadow_rows = ledger.get_multi_exchange_reference_history(limit=5)
+    assert len(shadow_rows) == 1
+    assert shadow_rows[0]["contract_ticker"] == snapshot.contract.ticker
+    assert shadow_rows[0]["reference_status"] == "UNAVAILABLE"
 
 
 def test_trade_table_has_settlement_timestamp_column(tmp_path):
