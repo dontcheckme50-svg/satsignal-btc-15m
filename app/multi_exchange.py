@@ -104,6 +104,15 @@ class MultiExchangeReference:
         self._running = False
         self._tasks = []
 
+    @staticmethod
+    def _coinbase_aggressor_side(maker_side: str) -> str:
+        maker_side = str(maker_side or "").lower()
+        if maker_side == "buy":
+            return "sell"
+        if maker_side == "sell":
+            return "buy"
+        return "unknown"
+
     async def start(self):
         if self._running:
             return
@@ -160,8 +169,7 @@ class MultiExchangeReference:
                             self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
                             # Coinbase Exchange side is maker-side; retain raw side only.
                             # Coinbase match side is the maker side; invert to aggressor side.
-                            maker_side = str(msg.get("side", "")).lower()
-                            aggressor_side = "sell" if maker_side == "buy" else ("buy" if maker_side == "sell" else "unknown")
+                            aggressor_side = self._coinbase_aggressor_side(msg.get("side"))
                             self.coinbase.trades.append((now, p, q, aggressor_side))
             except asyncio.CancelledError:
                 raise
