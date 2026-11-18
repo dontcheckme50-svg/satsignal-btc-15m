@@ -308,9 +308,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
       const flow15 = m.trade_flow?.windows?.["15"];
       const flow60 = m.trade_flow?.windows?.["60"];
-      const deltaFmt = (v) => v == null ? "--" : (v>0?"+":"")+Number(v).toFixed(4)+" BTC";
-      document.getElementById("mx-flow-delta").textContent = deltaFmt(flow15?.delta_btc)+" / "+deltaFmt(flow60?.delta_btc)+(flow60?.delta_ratio!=null?" ("+(flow60.delta_ratio*100).toFixed(1)+"%)":"");
-      document.getElementById("mx-flow-volume").textContent = flow60 ? Number(flow60.buy_volume_btc||0).toFixed(4)+" / "+Number(flow60.sell_volume_btc||0).toFixed(4) : "--";
+      const deltaFmt = (f) => !f ? "--" : (f.status!=="ACTIVE" ? f.status : ((f.delta_btc>0?"+":"")+Number(f.delta_btc).toFixed(4)+" BTC"));
+      document.getElementById("mx-flow-delta").textContent = deltaFmt(flow15)+" / "+deltaFmt(flow60)+(flow60?.status==="ACTIVE"&&flow60.delta_ratio!=null?" ("+(flow60.delta_ratio*100).toFixed(1)+"%)":"");
+      document.getElementById("mx-flow-volume").textContent = flow60?.status==="ACTIVE" ? Number(flow60.buy_volume_btc||0).toFixed(4)+" / "+Number(flow60.sell_volume_btc||0).toFixed(4) : (flow60?.status||"--");
       document.getElementById("mx-primary-diff").textContent = m.reference_vs_primary_bps == null ? "--" : (m.reference_vs_primary_bps>0?"+":"")+m.reference_vs_primary_bps.toFixed(2)+" bps";
       document.getElementById("mx-brti-diff").textContent = m.reference_vs_brti_bps == null ? "--" : (m.reference_vs_brti_bps>0?"+":"")+m.reference_vs_brti_bps.toFixed(2)+" bps";
       document.getElementById("mx-strike-diff").textContent = m.reference_vs_strike_bps == null ? "--" : (m.reference_vs_strike_bps>0?"+":"")+m.reference_vs_strike_bps.toFixed(2)+" bps";
