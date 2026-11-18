@@ -1331,3 +1331,40 @@ def test_verified_outcome_settles_paper_trade_without_prediction_lock(
     assert len(trades) == 1
     assert trades[0].status == "SETTLED"
     assert trades[0].pnl_usd == pytest.approx(expected_pnl)
+
+@pytest.mark.asyncio
+async def test_settlement_reconciler_discovers_open_trade_without_prediction_lock(tmp_path, monkeypatch):
+    from app.orchestrator import PredictorOrchestrator
+
+    ticker = "KXBTC15M-TRADE-ONLY-RECONCILE"
+    ledger = PredictionLedger(str(tmp_path / "trade-only-reconciliation.db"))
+    ledger.record_trade(TradeRecord(
+        mode="paper",
+        contract_ticker=ticker,
+        timestamp_iso="2026-11-18 00:00:00 UTC",
+        side="YES",
+        contracts=1,
+        entry_price=0.20,
+        quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01,
+        fair_prob_at_entry=0.70,
+        net_edge=0.49,
+        status="OPEN",
+        notes="No forecast lock exists yet.",
+    ))
+    hub = MarketDataHub()
+
+    async def verified_outcome(_ticker):
+        assert _ticker == ticker
+        return "UP", None
+
+    monkeypatch.setattr(hub, "fetch_verified_kalshi_settlement", verified_outcome)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    assert ledger.get_unsettled_contract_tickers() == [ticker]
+    await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT")
+
+    trade = ledger.get_recent_trades(limit=1)[0]
+    assert trade.status == "SETTLED"
+    assert trade.pnl_usd == pytest.approx(0.79)
+\n
