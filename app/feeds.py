@@ -191,16 +191,33 @@ class MarketDataHub:
                 if self._running:
                     await asyncio.sleep(1.5)
 
+    @staticmethod
+    def _parse_exchange_timestamp(value, fallback: Optional[float] = None) -> float:
+        try:
+            if isinstance(value, (int, float)):
+                parsed = float(value)
+                if parsed > 1e12:
+                    parsed /= 1000.0
+            elif isinstance(value, str) and value.strip():
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            else:
+                parsed = fallback if fallback is not None else time.time()
+        except (TypeError, ValueError, OverflowError):
+            parsed = fallback if fallback is not None else time.time()
+        return parsed if math.isfinite(parsed) and parsed > 0 else (fallback if fallback is not None else time.time())
+
     async def _run_binance_ws(self) -> None:
         async with websockets.connect(settings.binance_ws_url, ping_interval=20, open_timeout=8) as ws:
             async for raw in ws:
                 if not self._running: break
                 payload = json.loads(raw)
-                stream, data, now = payload.get("stream", ""), payload.get("data", {}), time.time()
+                stream, data, received_at = payload.get("stream", ""), payload.get("data", {}), time.time()
                 if "aggTrade" in stream:
-                    self.ingest_trade(now, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
+                    event_ts = self._parse_exchange_timestamp(data.get("T"), received_at)
+                    self.ingest_trade(event_ts, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
                 elif "depth20" in stream:
-                    self.ingest_book(now, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])])
+                    event_ts = self._parse_exchange_timestamp(data.get("E"), received_at)
+                    self.ingest_book(event_ts, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])])
 
     @staticmethod
     def _coinbase_ticker_book(msg: dict):
@@ -222,13 +239,14 @@ class MarketDataHub:
             await ws.send(json.dumps(sub))
             async for raw in ws:
                 if not self._running: break
-                msg, now = json.loads(raw), time.time()
+                msg, received_at = json.loads(raw), time.time()
+                event_ts = self._parse_exchange_timestamp(msg.get("time"), received_at)
                 if msg.get("type") == "match":
-                    self.ingest_trade(now, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
+                    self.ingest_trade(event_ts, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
                 elif msg.get("type") == "ticker":
                     parsed_book = self._coinbase_ticker_book(msg)
                     if parsed_book is not None:
-                        self.ingest_book(now, parsed_book[0], parsed_book[1])
+                        self.ingest_book(event_ts, parsed_book[0], parsed_book[1])
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
