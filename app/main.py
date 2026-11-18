@@ -189,6 +189,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Protective WAITs</span><span id="sb-waits">0</span></div>
     </div>
     <div class="card"><h3>Live Data Feed Health</h3><div id="feeds-list"></div></div>
+    <div class="card">
+      <h3>Multi-Exchange Reference <span id="mx-status" style="color:var(--wait)">SHADOW / WAITING</span></h3>
+      <div class="kv"><span>Consolidated USD Reference</span><span id="mx-price">Waiting for 2 USD venues</span></div>
+      <div class="kv"><span>Contributing Venues</span><span id="mx-venues">--</span></div>
+      <div class="kv"><span>Bid Liquidity (±0.25%)</span><span id="mx-bid-depth">--</span></div>
+      <div class="kv"><span>Ask Liquidity (±0.25%)</span><span id="mx-ask-depth">--</span></div>
+      <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
+      <div class="rationale" id="mx-method">Independent reference. Does not influence predictions.</div>
+    </div>
+
   </div>
   <div class="card" style="margin-bottom:12px;"><h3>Paper Execution Ledger</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Mode</th><th>Contract</th><th>Side</th><th>Qty</th><th>Entry</th><th>Quote Source</th><th>Fee</th><th>Edge</th><th>Status</th><th>P&L</th></tr></thead><tbody id="trades-body"></tbody></table></div></div>
   <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
@@ -266,6 +276,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
     }).join("");
   }
+  async function fetchMultiExchange() {
+    try {
+      const res = await fetch("/api/multi-exchange");
+      if (!res.ok) return;
+      const m = await res.json();
+      const statusEl = document.getElementById("mx-status");
+      statusEl.textContent = m.status + " / SHADOW";
+      statusEl.style.color = m.status === "LIVE" ? "var(--up)" : "var(--wait)";
+      document.getElementById("mx-price").textContent = m.reference_price != null ? fmtUSD(m.reference_price) : "Waiting for 2 USD venues";
+      document.getElementById("mx-venues").textContent = `${(m.included_venues||[]).join(", ")||"--"} (${m.usd_venue_count_live||0}/2 USD feeds)`;
+      document.getElementById("mx-bid-depth").textContent = fmtUSD(m.consolidated_bid_depth_usd_within_25bps||0);
+      document.getElementById("mx-ask-depth").textContent = fmtUSD(m.consolidated_ask_depth_usd_within_25bps||0);
+      document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
+      document.getElementById("mx-method").textContent = m.method;
+    } catch(e) {}
+  }
   async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
   function connectWS() {
     const wsEl = document.getElementById("ws-status");
@@ -274,7 +300,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); connectWS(); setInterval(tickTimers, 250);
+  fetchInitial(); fetchMultiExchange(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchMultiExchange, 2000);
 </script>
 </body>
 </html>"""
