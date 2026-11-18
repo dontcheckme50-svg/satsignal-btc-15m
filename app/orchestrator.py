@@ -245,6 +245,9 @@ class PredictorOrchestrator:
                     up_prob=final.up_probability if lock_signal != Signal.WAIT else 0.5,
                     down_prob=final.down_probability if lock_signal != Signal.WAIT else 0.5,
                     regime=regime.regime,
+                    brti_cohort=brti_cohort,
+                    brti_side_at_lock=brti_side_at_lock,
+                    spot_side_at_lock=spot_side_at_lock,
                 ))
                 self._reset_directional_lock_candidate()
         engines_summary = EngineStatusSummary(
