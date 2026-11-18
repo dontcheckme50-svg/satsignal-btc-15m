@@ -806,6 +806,32 @@ async def test_settlement_reconciliation_rotates_past_unsettled_oldest_batch(tmp
     assert set(ledger.get_unsettled_contract_tickers()) == set(tickers[:5])
 
 
+@pytest.mark.asyncio
+async def test_settlement_scheduler_runs_even_without_prediction_snapshots(tmp_path, monkeypatch):
+    from app.orchestrator import PredictorOrchestrator
+
+    orchestrator = PredictorOrchestrator(
+        MarketDataHub(), PredictionLedger(str(tmp_path / "settlement-no-spot.db"))
+    )
+    scheduled = []
+
+    async def fake_worker(current_ticker, fallback_price):
+        scheduled.append((current_ticker, fallback_price))
+
+    monkeypatch.setattr(orchestrator, "_settlement_worker", fake_worker)
+
+    for _ in range(9):
+        orchestrator._schedule_settlement_reconciliation("")
+    assert orchestrator._settlement_task is None
+
+    # The tenth loop schedules reconciliation even though there was no
+    # market snapshot and therefore no prediction/execution cycle.
+    orchestrator._schedule_settlement_reconciliation("")
+    await orchestrator._settlement_task
+
+    assert scheduled == [("", 0.0)]
+
+
 def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
     hub = MarketDataHub()
     epoch = 1_800_000_000.0
