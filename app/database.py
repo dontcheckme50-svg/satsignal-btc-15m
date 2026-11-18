@@ -78,7 +78,9 @@ class PredictionLedger:
                     contract_ticker TEXT NOT NULL,
                     strike_price REAL,
                     primary_spot_price REAL,
+                    primary_spot_age_seconds REAL,
                     official_brti_price REAL,
+                    official_brti_age_seconds REAL,
                     reference_price REAL,
                     reference_status TEXT NOT NULL,
                     usd_venue_count INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +103,11 @@ class PredictionLedger:
             trade_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
             if "settled_at" not in trade_columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN settled_at TEXT")
+            reference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(multi_exchange_reference)").fetchall()}
+            if "primary_spot_age_seconds" not in reference_columns:
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN primary_spot_age_seconds REAL")
+            if "official_brti_age_seconds" not in reference_columns:
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN official_brti_age_seconds REAL")
 
 
     def record_multi_exchange_reference(self, epoch_ts: float, contract_ticker: str, strike_price: Optional[float], primary_spot_price: Optional[float], official_brti_price: Optional[float], snapshot: dict) -> int:
@@ -119,14 +126,15 @@ class PredictionLedger:
         with self._connection() as conn:
             cur = conn.execute(
                 """INSERT INTO multi_exchange_reference (
-                    epoch_ts, contract_ticker, strike_price, primary_spot_price, official_brti_price,
-                    reference_price, reference_status, usd_venue_count, included_venues_json,
+                    epoch_ts, contract_ticker, strike_price, primary_spot_price, primary_spot_age_seconds,
+                    official_brti_price, official_brti_age_seconds, reference_price, reference_status, usd_venue_count, included_venues_json,
                     outlier_venues_json, venues_json, bid_depth_25bps, ask_depth_25bps, imbalance,
                     ref_vs_primary_bps, ref_vs_brti_bps, primary_vs_brti_bps
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    epoch_ts, contract_ticker, strike_price, primary_spot_price, official_brti_price,
-                    reference_price, snapshot.get("status", "UNAVAILABLE"), int(snapshot.get("usd_venue_count_live", 0)),
+                    epoch_ts, contract_ticker, strike_price, primary_spot_price, snapshot.get("primary_spot_age_seconds"),
+                    official_brti_price, snapshot.get("official_brti_age_seconds"), reference_price,
+                    snapshot.get("status", "UNAVAILABLE"), int(snapshot.get("usd_venue_count_live", 0)),
                     json.dumps(snapshot.get("included_venues", [])), json.dumps(snapshot.get("outlier_venues", [])),
                     json.dumps(venue_details), snapshot.get("consolidated_bid_depth_usd_within_25bps"),
                     snapshot.get("consolidated_ask_depth_usd_within_25bps"), snapshot.get("consolidated_imbalance"),
