@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     yield
     orchestrator.stop()
     orch_task.cancel()
+    await asyncio.gather(orch_task, return_exceptions=True)
     await hub.stop()
 
 app = FastAPI(title="SATSIGNAL BTC 15M API", version="2.0.0", lifespan=lifespan)
