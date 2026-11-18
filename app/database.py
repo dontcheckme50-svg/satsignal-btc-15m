@@ -53,7 +53,15 @@ class PredictionLedger:
                     actual_outcome TEXT,
                     final_won INTEGER,
                     main_won INTEGER,
-                    early_won INTEGER
+                    early_won INTEGER,
+                    is_official_lock INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS prediction_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_ticker TEXT NOT NULL,
+                    epoch_ts REAL NOT NULL,
+                    seconds_remaining REAL NOT NULL,
+                    payload_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,9 +105,25 @@ class PredictionLedger:
                 );
                 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_pred_settled ON predictions(settled);
+                CREATE INDEX IF NOT EXISTS idx_observation_contract_epoch ON prediction_observations(contract_ticker, epoch_ts);
                 CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_multi_ref_epoch ON multi_exchange_reference(epoch_ts);
                 CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
+            """)
+            prediction_columns = {row["name"] for row in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+            if "is_official_lock" not in prediction_columns:
+                conn.execute("ALTER TABLE predictions ADD COLUMN is_official_lock INTEGER NOT NULL DEFAULT 0")
+                # Keep all historical snapshots, but designate only the latest
+                # existing record for each contract as the legacy scoreboard representative.
+                conn.execute("""
+                    UPDATE predictions SET is_official_lock = 1
+                    WHERE id IN (
+                        SELECT MAX(id) FROM predictions GROUP BY contract_ticker
+                    )
+                """)
+            conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_one_official_prediction_per_contract
+                ON predictions(contract_ticker) WHERE is_official_lock = 1
             """)
             trade_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
             if "settled_at" not in trade_columns:
@@ -164,19 +188,61 @@ class PredictionLedger:
         return result
 
     def record_prediction(self, rec: PredictionRecord) -> int:
+        """Persist the one official scored prediction for a contract, idempotently."""
         with self._connection() as conn:
             cur = conn.execute(
-                """INSERT INTO predictions (
+                """INSERT OR IGNORE INTO predictions (
                     contract_ticker, timestamp_iso, epoch_ts, strike_price,
                     btc_price_at_pred, seconds_remaining, main_signal, early_signal,
-                    final_signal, confidence, up_prob, down_prob, regime
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    final_signal, confidence, up_prob, down_prob, regime, is_official_lock
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
                 (rec.contract_ticker, rec.timestamp_iso, rec.epoch_ts, rec.strike_price,
                  rec.btc_price_at_pred, rec.seconds_remaining, rec.main_signal.value,
                  rec.early_signal.value, rec.final_signal.value, rec.confidence,
                  rec.up_prob, rec.down_prob, rec.regime.value),
             )
+            if cur.rowcount:
+                return int(cur.lastrowid)
+            existing = conn.execute(
+                "SELECT id FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1",
+                (rec.contract_ticker,),
+            ).fetchone()
+            return int(existing["id"]) if existing else 0
+
+    def has_official_prediction_lock(self, contract_ticker: str) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 LIMIT 1",
+                (contract_ticker,),
+            ).fetchone()
+            return row is not None
+
+    def record_prediction_observation(self, contract_ticker: str, epoch_ts: float, seconds_remaining: float, payload: dict) -> int:
+        with self._connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO prediction_observations (contract_ticker, epoch_ts, seconds_remaining, payload_json) VALUES (?, ?, ?, ?)",
+                (contract_ticker, epoch_ts, seconds_remaining, json.dumps(payload, default=lambda value: getattr(value, "value", str(value)))),
+            )
             return int(cur.lastrowid)
+
+    def get_recent_prediction_observations(self, limit: int = 100, contract_ticker: Optional[str] = None) -> List[dict]:
+        with self._connection() as conn:
+            if contract_ticker:
+                rows = conn.execute(
+                    "SELECT * FROM prediction_observations WHERE contract_ticker = ? ORDER BY epoch_ts DESC LIMIT ?",
+                    (contract_ticker, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM prediction_observations ORDER BY epoch_ts DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["payload"] = json.loads(item.pop("payload_json") or "{}")
+                result.append(item)
+            return result
 
     def record_trade(self, tr: TradeRecord) -> int:
         with self._connection() as conn:
@@ -199,7 +265,7 @@ class PredictionLedger:
             rows = conn.execute(
                 """SELECT contract_ticker, MIN(epoch_ts) AS first_prediction_ts
                    FROM predictions
-                   WHERE settled = 0 AND contract_ticker LIKE 'KXBTC15M%'
+                   WHERE settled = 0 AND is_official_lock = 1 AND contract_ticker LIKE 'KXBTC15M%'
                    GROUP BY contract_ticker
                    ORDER BY first_prediction_ts ASC"""
             ).fetchall()
@@ -217,7 +283,7 @@ class PredictionLedger:
 
     def settle_contract(self, contract_ticker: str, settlement_price: float, official_result: Optional[str] = None, settlement_source: str = "SPOT_CLOSE_PROXY") -> int:
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM predictions WHERE contract_ticker = ? AND settled = 0", (contract_ticker,)).fetchall()
+            rows = conn.execute("SELECT * FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 AND settled = 0", (contract_ticker,)).fetchall()
             updated = 0
             for r in rows:
                 strike = float(r["strike_price"])
@@ -233,7 +299,7 @@ class PredictionLedger:
 
             open_trades = conn.execute("SELECT * FROM trades WHERE contract_ticker = ? AND status = 'OPEN'", (contract_ticker,)).fetchall()
             for tr in open_trades:
-                pred_row = conn.execute("SELECT strike_price, actual_outcome FROM predictions WHERE contract_ticker = ? LIMIT 1", (contract_ticker,)).fetchone()
+                pred_row = conn.execute("SELECT strike_price, actual_outcome FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 LIMIT 1", (contract_ticker,)).fetchone()
                 if pred_row and pred_row["actual_outcome"] in ("UP", "DOWN"):
                     yes_won = pred_row["actual_outcome"] == "UP"
                 elif official_result in ("UP", "DOWN"):
@@ -256,7 +322,7 @@ class PredictionLedger:
 
     def get_recent_predictions(self, limit: int = 25) -> List[PredictionRecord]:
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM predictions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            rows = conn.execute("SELECT * FROM predictions WHERE is_official_lock = 1 ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
             return [
                 PredictionRecord(
                     id=r["id"], contract_ticker=r["contract_ticker"], timestamp_iso=r["timestamp_iso"],
@@ -286,8 +352,8 @@ class PredictionLedger:
 
     def get_scoreboard(self) -> Scoreboard:
         with self._connection() as conn:
-            totals = conn.execute("SELECT COUNT(*) AS total, SUM(CASE WHEN settled = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN final_signal = 'WAIT' THEN 1 ELSE 0 END) AS waits FROM predictions").fetchone()
-            settled_rows = conn.execute("SELECT up_prob, actual_outcome, final_won, main_won, early_won FROM predictions WHERE settled = 1").fetchall()
+            totals = conn.execute("SELECT COUNT(*) AS total, SUM(CASE WHEN settled = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN final_signal = 'WAIT' THEN 1 ELSE 0 END) AS waits FROM predictions WHERE is_official_lock = 1").fetchone()
+            settled_rows = conn.execute("SELECT up_prob, actual_outcome, final_won, main_won, early_won FROM predictions WHERE settled = 1 AND is_official_lock = 1").fetchall()
             def calc_acc(col: str) -> tuple[int, int, int, float]:
                 # WAIT signals are deliberately excluded from directional accuracy.
                 vals = [r[col] for r in settled_rows if r[col] is not None]
