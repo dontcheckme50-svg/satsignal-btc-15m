@@ -1123,3 +1123,44 @@ def test_wait_or_reversal_resets_directional_confirmation(monkeypatch, tmp_path,
     assert orchestrator._directional_lock_candidate == Signal.UP
     assert orchestrator._directional_lock_candidate_count == 1
 
+def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "brti-cohorts.db"))
+    base = dict(
+        timestamp_iso="2026-11-18 00:00:00 UTC",
+        epoch_ts=1795046400.0,
+        strike_price=90000.0,
+        btc_price_at_pred=90010.0,
+        seconds_remaining=500.0,
+        main_signal=Signal.UP,
+        early_signal=Signal.UP,
+        final_signal=Signal.UP,
+        confidence=75.0,
+        up_prob=0.75,
+        down_prob=0.25,
+        regime=MarketRegime.STABLE,
+    )
+    records = [
+        PredictionRecord(contract_ticker="KXBTC15M-COHORT-A", brti_cohort="AGREE_UP",
+                         brti_side_at_lock="UP", spot_side_at_lock="UP", **base),
+        PredictionRecord(contract_ticker="KXBTC15M-COHORT-B", brti_cohort="DISAGREE",
+                         brti_side_at_lock="DOWN", spot_side_at_lock="UP", **base),
+        PredictionRecord(contract_ticker="KXBTC15M-COHORT-C", brti_cohort="BRTI_UNAVAILABLE",
+                         brti_side_at_lock=None, spot_side_at_lock="UP", **base),
+    ]
+    for record in records:
+        ledger.record_prediction(record)
+    ledger.settle_contract("KXBTC15M-COHORT-A", 90020.0, "UP", "KALSHI_OFFICIAL")
+    ledger.settle_contract("KXBTC15M-COHORT-B", 89980.0, "DOWN", "KALSHI_OFFICIAL")
+    # Leave the third contract pending: pending predictions must not affect accuracy.
+    saved = {p.contract_ticker: p for p in ledger.get_recent_predictions()}
+    assert saved["KXBTC15M-COHORT-A"].brti_cohort == "AGREE_UP"
+    assert saved["KXBTC15M-COHORT-B"].brti_side_at_lock == "DOWN"
+    assert saved["KXBTC15M-COHORT-C"].settled is False
+    stats = {row["cohort"]: row for row in ledger.get_brti_cohort_performance()}
+    assert stats["AGREE_UP"] == {
+        "cohort": "AGREE_UP", "settled": 1, "wins": 1, "losses": 0, "accuracy_pct": 100.0
+    }
+    assert stats["DISAGREE"] == {
+        "cohort": "DISAGREE", "settled": 1, "wins": 0, "losses": 1, "accuracy_pct": 0.0
+    }
+    assert "BRTI_UNAVAILABLE" not in stats
