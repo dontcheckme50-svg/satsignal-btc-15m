@@ -54,6 +54,7 @@ A read-only shadow market-data layer runs independently of the five prediction e
 - Binance BTC/USDT is displayed as a comparison venue only and is not mixed into the USD reference.
 
 The composite uses USD-quoted venue mid-prices, rejects venues more than 0.35% from the median, then calculates a capped depth-weighted mid-price from accepted venues. Near-market liquidity and imbalance are measured within 0.25% of mid. A composite is marked LIVE only when at least two accepted USD venues are fresh; otherwise it is PARTIAL or UNAVAILABLE. This is an independent estimate, **not official CF Benchmarks BRTI**.
+- Coinbase and Kraken trade prints are normalized to aggressor-side BUY/SELL flow (Coinbase maker-side is inverted). Rolling 15s, 60s, and 180s windows expose buy volume, sell volume, net BTC delta, delta ratio, trade count, and unclassified volume. Quiet windows are distinguished from unclassified flow. These remain shadow measurements, not prediction inputs.
 
 The shadow feed does not affect predictions or execution. It is visible on the dashboard and through:
 
