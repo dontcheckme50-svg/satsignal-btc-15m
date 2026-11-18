@@ -1,3 +1,4 @@
+import asyncio
 import time
 import pytest
 from pathlib import Path
@@ -486,7 +487,7 @@ def test_unsettled_settlement_queue_contains_only_official_contracts_and_is_orde
 
 
 @pytest.mark.asyncio
-async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent(tmp_path):
+async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent(tmp_path, monkeypatch):
     from app.orchestrator import PredictorOrchestrator
 
     ledger = PredictionLedger(str(tmp_path / "settlement-batch.db"))
@@ -508,12 +509,8 @@ async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent
         active -= 1
         return None
 
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(hub, "fetch_verified_kalshi_settlement", fake_verify)
-    try:
-        await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT", fallback_price=90000.0)
-    finally:
-        monkeypatch.undo()
+    await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT", fallback_price=90000.0)
 
     assert len(calls) == 5
     assert max_active <= 3
