@@ -105,6 +105,10 @@ async def get_prediction_observations(limit: int = Query(default=100, ge=1, le=1
 async def get_scoreboard():
     return ledger.get_scoreboard().model_dump()
 
+@app.get("/api/brti-cohorts")
+async def get_brti_cohorts():
+    return {"cohorts": ledger.get_brti_cohort_performance()}
+
 @app.get("/api/trades")
 async def get_trades(limit: int = Query(default=30, ge=1, le=200)):
     return {"trades": [t.model_dump() for t in ledger.get_recent_trades(limit=limit)]}
