@@ -45,6 +45,7 @@ class PredictorOrchestrator:
         # Rotate bounded settlement batches so an old unresolved contract
         # cannot permanently starve newer contracts later in the backlog.
         self._settlement_cursor_ticker: Optional[str] = None
+        self._reconcile_cycle_counter: int = 0
 
     def _reset_directional_lock_candidate(self) -> None:
         self._directional_lock_candidate_ticker = None
@@ -291,6 +292,19 @@ class PredictorOrchestrator:
         self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
         return self.latest_snapshot
 
+    def _schedule_settlement_reconciliation(self, current_ticker: str) -> None:
+        # Settlement is independent of spot-feed health. Count every worker
+        # loop, including loops that cannot produce a prediction snapshot.
+        self._reconcile_cycle_counter += 1
+        if self._reconcile_cycle_counter < 10:
+            return
+        self._reconcile_cycle_counter = 0
+        if self._settlement_task is None or self._settlement_task.done():
+            self._settlement_task = asyncio.create_task(
+                self._settlement_worker(current_ticker, self.hub.live_price or 0.0),
+                name="settlement-reconciliation",
+            )
+
     async def _settlement_worker(self, current_ticker: str, fallback_price: float) -> None:
         try:
             await self.reconcile_unsettled_contracts(current_ticker, fallback_price)
@@ -374,7 +388,6 @@ class PredictorOrchestrator:
 
     async def run(self) -> None:
         self._running = True
-        reconcile_counter = 0
         while self._running:
             cycle_started = time.time()
             self.last_cycle_started_ts = cycle_started
@@ -408,14 +421,6 @@ class PredictorOrchestrator:
                 except Exception as exc:
                     self.last_execution_error = f"{type(exc).__name__}: {exc}"
                     logger.exception("SATSignal execution evaluation failed; prediction worker continues")
-                reconcile_counter += 1
-                if reconcile_counter >= 10:
-                    reconcile_counter = 0
-                    if self._settlement_task is None or self._settlement_task.done():
-                        self._settlement_task = asyncio.create_task(
-                            self._settlement_worker(snap.contract.ticker, snap.evidence.live_price),
-                            name="settlement-reconciliation",
-                        )
                 try:
                     snap.scoreboard = self.ledger.get_scoreboard()
                     snap.recent_predictions = self.ledger.get_recent_predictions(limit=20)
@@ -427,6 +432,16 @@ class PredictorOrchestrator:
                         cb(snap)
                     except Exception:
                         logger.exception("Snapshot listener failed; other listeners will still be notified")
+            market = self.hub.kalshi_contract
+            now = time.time()
+            current_ticker = (
+                market.ticker
+                if market is not None
+                and market.is_official_kalshi
+                and market.open_timestamp <= now < market.close_timestamp
+                else ""
+            )
+            self._schedule_settlement_reconciliation(current_ticker)
             await asyncio.sleep(1.0)
 
     def stop(self) -> None:
