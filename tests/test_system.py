@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 import pytest
 from pathlib import Path
 
@@ -522,7 +523,7 @@ def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
     epoch = 1_800_000_000.0
 
     assert hub._parse_exchange_timestamp(epoch * 1000) == epoch
-    assert hub._parse_exchange_timestamp("2027-01-15T08:00:00Z") == pytest.approx(
-        time.mktime(time.strptime("2027-01-15T08:00:00", "%Y-%m-%dT%H:%M:%S"))
-    )
+    assert hub._parse_exchange_timestamp("2027-01-15T08:00:00Z") == datetime(
+        2027, 1, 15, 8, 0, 0, tzinfo=timezone.utc
+    ).timestamp()
     assert hub._parse_exchange_timestamp("bad-time", fallback=123.0) == 123.0
