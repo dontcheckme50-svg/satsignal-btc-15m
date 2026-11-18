@@ -17,7 +17,7 @@ class VenueBook:
         self.last_book_ts: float = 0.0
         self.last_trade_ts: float = 0.0
         self.last_trade_price: Optional[float] = None
-        self.trades = deque(maxlen=5000)
+        self.trades = deque(maxlen=50000)
         self.connected = False
         self.last_error: Optional[str] = None
         self.reconnects = 0
@@ -36,8 +36,10 @@ class VenueBook:
             "latest_trade_age_seconds": round(latest_trade_age, 3) if latest_trade_age is not None else None,
             "windows": {},
         }
+        max_window = max(windows) if windows else 0
+        recent_max = [trade for trade in self.trades if trade[0] >= now - max_window]
         for window in windows:
-            recent = [trade for trade in self.trades if trade[0] >= now - window]
+            recent = [trade for trade in recent_max if trade[0] >= now - window]
             buy_volume = sum(qty for _, _, qty, side in recent if side == "buy")
             sell_volume = sum(qty for _, _, qty, side in recent if side == "sell")
             unknown_volume = sum(qty for _, _, qty, side in recent if side not in ("buy", "sell"))
