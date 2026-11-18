@@ -228,3 +228,42 @@ def test_non_finite_order_book_levels_are_ignored():
     assert snapshot["status"] == "LIVE"
     assert snapshot["bid"] == 100.0
     assert snapshot["bid_depth"] == 200.0
+
+
+
+def test_future_book_timestamp_is_not_treated_as_fresh():
+    venue = VenueBook("TEST", "USD")
+    venue.bids = {100.0: 1.0}
+    venue.asks = {101.0: 1.0}
+    venue.last_book_ts = 1005.0
+
+    snapshot = venue.snapshot(now=1000.0)
+
+    assert snapshot["status"] == "FUTURE_TIMESTAMP"
+    assert snapshot["mid"] is None
+    assert snapshot["age_seconds"] is None
+
+
+def test_future_trades_are_excluded_from_rolling_flow():
+    venue = VenueBook("TEST", "USD")
+    venue.trades.extend([
+        (995.0, 100.0, 0.5, "buy"),
+        (1001.0, 100.0, 10.0, "sell"),
+    ])
+
+    flow = venue.trade_flow_snapshot(now=1000.0)
+
+    assert flow["windows"]["15"]["buy_volume_btc"] == 0.5
+    assert flow["windows"]["15"]["sell_volume_btc"] == 0.0
+    assert flow["windows"]["15"]["trade_count"] == 1
+
+
+def test_bitstamp_ticker_poll_does_not_claim_trade_freshness():
+    venue = VenueBook("BITSTAMP", "USD")
+    venue.last_trade_price = 100.0
+    venue.last_ticker_ts = 995.0
+
+    snapshot = venue.snapshot(now=1000.0)
+
+    assert snapshot["last_trade_age_seconds"] is None
+    assert snapshot["last_ticker_age_seconds"] == 5.0
