@@ -1593,3 +1593,72 @@ def test_all_prediction_engines_disclose_stale_cached_spot_and_recover(tmp_path)
     assert recovered.engines.engine_d_early["status"] in {"ACTIVE_WINDOW", "MONITORING"}
     assert recovered.engines.engine_e_final["status"] == "ACTIVE"
     assert recovered.engines.engine_a_evidence["input_health"]["fresh"] is True
+
+
+def test_evidence_engine_excludes_pre_contract_trades_and_bars_from_flow():
+    now = time.time()
+    contract = _contract(
+        open_timestamp=now - 2.0,
+        close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    previous_contract_sell = (now - 5.0, 89900.0, 50.0, True)
+    current_contract_buy = (now - 1.0, 90010.0, 0.2, False)
+    old_bar = (int(now - 5.0), 80000.0, 100.0)
+    current_bar = (int(now - 1.0), 90010.0, 0.1)
+
+    engine = EvidenceEngine()
+    with_previous_contract_data = engine.analyze(
+        now, 90010.0, contract,
+        [previous_contract_sell, current_contract_buy],
+        [old_bar, current_bar], [], [],
+    )
+    current_contract_only = engine.analyze(
+        now, 90010.0, contract,
+        [current_contract_buy], [current_bar], [], [],
+    )
+
+    assert with_previous_contract_data.buying_pressure_pct == 100.0
+    assert with_previous_contract_data.selling_pressure_pct == 0.0
+    assert with_previous_contract_data.trade_delta_60s == pytest.approx(0.2)
+    assert with_previous_contract_data.cvd_contract == pytest.approx(0.2)
+    assert with_previous_contract_data.momentum_score == current_contract_only.momentum_score
+    assert with_previous_contract_data.rsi_14 == current_contract_only.rsi_14
+    assert with_previous_contract_data.volatility_annualized == current_contract_only.volatility_annualized
+
+
+def test_regime_engine_receives_only_active_contract_bars(monkeypatch, tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(
+        open_timestamp=now - 10.0,
+        close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)], source="BINANCE_SPOT")
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    hub.bars_1s.extend([
+        (int(now - 20.0), 80000.0, 100.0),  # prior contract
+        (int(now - 5.0), 90005.0, 0.1),    # active contract
+    ])
+
+    orchestrator = PredictorOrchestrator(
+        hub, PredictionLedger(str(tmp_path / "contract-scoped-regime.db"))
+    )
+    captured = {}
+    original = orchestrator.regime_engine.analyze
+
+    def capture_bars(evidence, weakness, bars):
+        captured["bars"] = list(bars)
+        return original(evidence, weakness, bars)
+
+    monkeypatch.setattr(orchestrator.regime_engine, "analyze", capture_bars)
+    snapshot = orchestrator.evaluate_once(now=now, record_to_db=False)
+
+    assert snapshot is not None
+    assert captured["bars"]
+    assert all(bar[0] >= contract.open_timestamp for bar in captured["bars"])
