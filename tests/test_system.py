@@ -473,3 +473,47 @@ async def test_primary_spot_stream_clean_close_is_backed_off(monkeypatch):
     await hub._spot_stream_loop()
 
     assert calls == {"worker": 1, "sleep": 1}
+
+
+
+def test_unsettled_settlement_queue_contains_only_official_contracts_and_is_ordered(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "settlement-queue.db"))
+    ledger.record_prediction(_prediction_record("SYNTH-BTC15M-A", ts=1794873600.0))
+    ledger.record_prediction(_prediction_record("KXBTC15M-NEW", ts=1794873700.0))
+    ledger.record_prediction(_prediction_record("KXBTC15M-OLD", ts=1794873500.0))
+
+    assert ledger.get_unsettled_contract_tickers() == ["KXBTC15M-OLD", "KXBTC15M-NEW"]
+
+
+@pytest.mark.asyncio
+async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    ledger = PredictionLedger(str(tmp_path / "settlement-batch.db"))
+    for i in range(7):
+        ledger.record_prediction(_prediction_record(f"KXBTC15M-{i}", ts=1794873600.0 + i))
+
+    hub = MarketDataHub()
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    calls = []
+    active = 0
+    max_active = 0
+
+    async def fake_verify(ticker):
+        nonlocal active, max_active
+        calls.append(ticker)
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return None
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(hub, "fetch_verified_kalshi_settlement", fake_verify)
+    try:
+        await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT", fallback_price=90000.0)
+    finally:
+        monkeypatch.undo()
+
+    assert len(calls) == 5
+    assert max_active <= 3
