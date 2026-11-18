@@ -1062,3 +1062,64 @@ def test_contract_rollover_clears_previous_directional_confirmation_candidate(tm
     assert orchestrator._directional_lock_candidate_count == 0
     assert orchestrator.last_logged_ts == 0.0
 
+def test_directional_lock_requires_two_consecutive_matching_votes(monkeypatch, tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(open_timestamp=now - 10.0, close_timestamp=now + 800.0)
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    ledger = PredictionLedger(str(tmp_path / "two-vote-lock.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    monkeypatch.setattr(orchestrator.final_engine, "decide", lambda *a, **k: _decision(Signal.UP))
+
+    first = orchestrator.evaluate_once(now=now, record_to_db=True)
+    assert first is not None
+    assert ledger.get_recent_predictions() == []
+    assert orchestrator._directional_lock_candidate_count == 1
+
+    second = orchestrator.evaluate_once(now=now + 1.0, record_to_db=True)
+    assert second is not None
+    rows = ledger.get_recent_predictions()
+    assert len(rows) == 1
+    assert rows[0].contract_ticker == contract.ticker
+    assert rows[0].final_signal == Signal.UP
+    assert ledger.has_official_prediction_lock(contract.ticker)
+
+
+@pytest.mark.parametrize(
+    "votes",
+    [
+        [Signal.UP, Signal.WAIT, Signal.UP],
+        [Signal.UP, Signal.DOWN, Signal.UP],
+    ],
+)
+def test_wait_or_reversal_resets_directional_confirmation(monkeypatch, tmp_path, votes):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(open_timestamp=now - 10.0, close_timestamp=now + 800.0)
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    ledger = PredictionLedger(str(tmp_path / f"reset-{votes[1].value}.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    sequence = iter(votes)
+    monkeypatch.setattr(
+        orchestrator.final_engine, "decide",
+        lambda *a, **k: _decision(next(sequence), 0.95 if votes[0] != Signal.DOWN else 0.05,
+                                  0.05 if votes[0] != Signal.DOWN else 0.95),
+    )
+
+    for offset in range(len(votes)):
+        orchestrator.evaluate_once(now=now + offset, record_to_db=True)
+
+    assert ledger.get_recent_predictions() == []
+    assert orchestrator._directional_lock_candidate == Signal.UP
+    assert orchestrator._directional_lock_candidate_count == 1
+
