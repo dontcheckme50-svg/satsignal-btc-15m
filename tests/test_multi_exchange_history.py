@@ -47,3 +47,26 @@ def test_multi_exchange_history_api_returns_observations():
     response = client.get("/api/multi-exchange/history?limit=10")
     assert response.status_code == 200
     assert "observations" in response.json()
+
+def test_stale_primary_and_brtI_are_not_used_in_reference_comparisons():
+    import time
+    from app.feeds import MarketDataHub
+
+    hub = MarketDataHub()
+    hub.live_price = 90000.0
+    hub.active_spot_source = "BINANCE_SPOT"
+    hub.last_spot_ts = time.time() - 12.0
+    hub.bids = [(89990.0, 1.0)]
+    hub.asks = [(90010.0, 1.0)]
+    hub.official_brti_price = 90005.0
+    hub.last_brti_ts = time.time() - 12.0
+    hub.brti_status = "LIVE"
+
+    snapshot = hub.get_multi_exchange_snapshot()
+
+    assert snapshot["primary_spot_price"] is None
+    assert snapshot["official_brti_price"] is None
+    assert snapshot["primary_spot_age_seconds"] > 5.0
+    assert snapshot["official_brti_age_seconds"] > 5.0
+    assert snapshot["reference_vs_primary_bps"] is None
+    assert snapshot["reference_vs_brti_bps"] is None
