@@ -194,7 +194,7 @@ class PredictorOrchestrator:
             "total_cycle_errors": self.total_cycle_errors,
             "last_execution_error": self.last_execution_error,
             "last_settlement_error": self.last_settlement_error,
-            "settlement_reconciliation_running": bool(self._settlement_task is not None and not self._settlement_task.done()),
+            "settlement_reconciliation_running": bool(getattr(self, "_settlement_task", None) is not None and not getattr(self, "_settlement_task").done()),
             "health": health,
         }
 
