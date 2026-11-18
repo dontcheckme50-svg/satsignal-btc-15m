@@ -9,5 +9,8 @@ def test_multi_exchange_shadow_endpoint():
     payload = response.json()
     assert "reference_price" in payload
     assert "venues" in payload
+    assert "reference_vs_primary_bps" in payload
+    assert "reference_vs_brti_bps" in payload
+    assert "reference_vs_strike_bps" in payload
     assert payload["venue_count_required"] == 2
     assert "not CF Benchmarks BRTI" in payload["method"]
