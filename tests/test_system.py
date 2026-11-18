@@ -527,3 +527,27 @@ def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
         2027, 1, 15, 8, 0, 0, tzinfo=timezone.utc
     ).timestamp()
     assert hub._parse_exchange_timestamp("bad-time", fallback=123.0) == 123.0
+
+
+
+def test_fallback_source_can_recover_when_exchange_clock_is_behind():
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_trade(now, 90000.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_trade(now - 0.2, 90001.0, 0.1, False, "COINBASE_FALLBACK")
+
+    assert hub.active_spot_source == "COINBASE_FALLBACK"
+    assert hub.live_price == 90001.0
+    assert hub.last_spot_ts == pytest.approx(now - 0.2)
+    assert hub.get_feed_statuses()[0].age_seconds >= 0.0
+
+
+def test_order_book_source_switch_allows_timestamp_offset():
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_book(now, [(89999.0, 2.0)], [(90001.0, 2.0)], source="BINANCE_SPOT")
+    hub.ingest_book(now - 0.2, [(90000.0, 2.0)], [(90002.0, 2.0)], source="COINBASE_FALLBACK")
+
+    assert hub.bids[0][0] == 90000.0
+    assert hub.last_book_source == "COINBASE_FALLBACK"
+    assert hub.last_book_ts == pytest.approx(now - 0.2)
