@@ -100,13 +100,22 @@ class MarketDataHub:
         if self.active_spot_source == "BINANCE_SPOT":
             self.multi_exchange.ingest_binance(self.live_price, list(self.bids), list(self.asks), self.last_spot_ts)
         snapshot = self.multi_exchange.get_snapshot()
-        snapshot["primary_spot_price"] = self.live_price
-        snapshot["official_brti_price"] = self.official_brti_price
+        now = time.time()
+        primary_age = round(now - self.last_spot_ts, 3) if self.last_spot_ts else None
+        brti_age = round(now - self.last_brti_ts, 3) if self.last_brti_ts else None
+        primary_fresh = primary_age is not None and primary_age <= settings.stale_feed_threshold_sec
+        brti_fresh = self.brti_status == "LIVE" and brti_age is not None and brti_age <= settings.stale_feed_threshold_sec
+        primary_price = self.live_price if primary_fresh else None
+        brti_price = self.official_brti_price if brti_fresh else None
+        snapshot["primary_spot_price"] = primary_price
+        snapshot["primary_spot_age_seconds"] = primary_age
+        snapshot["official_brti_price"] = brti_price
+        snapshot["official_brti_age_seconds"] = brti_age
         ref_price = snapshot.get("reference_price")
         def diff_bps(value, benchmark):
             return round((float(value) - float(benchmark)) / float(benchmark) * 10000.0, 4) if value is not None and benchmark is not None and float(benchmark) > 0 else None
-        snapshot["reference_vs_primary_bps"] = diff_bps(ref_price, self.live_price)
-        snapshot["reference_vs_brti_bps"] = diff_bps(ref_price, self.official_brti_price)
+        snapshot["reference_vs_primary_bps"] = diff_bps(ref_price, primary_price)
+        snapshot["reference_vs_brti_bps"] = diff_bps(ref_price, brti_price)
         return snapshot
 
     async def fetch_verified_kalshi_settlement(self, ticker: str) -> Optional[Tuple[str, Optional[float]]]:
