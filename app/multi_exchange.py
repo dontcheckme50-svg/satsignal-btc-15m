@@ -121,6 +121,7 @@ class MultiExchangeReference:
             asyncio.create_task(self._coinbase_loop(), name="multi-coinbase"),
             asyncio.create_task(self._kraken_loop(), name="multi-kraken"),
             asyncio.create_task(self._bitstamp_poll_loop(), name="multi-bitstamp"),
+            asyncio.create_task(self._binance_loop(), name="multi-binance"),
         ]
 
     async def stop(self):
@@ -140,6 +141,50 @@ class MultiExchangeReference:
             self.binance.asks = {float(p): float(q) for p, q in asks if float(q) > 0}
             self.binance.last_book_ts = ts
             self.binance.connected = True
+
+    @staticmethod
+    def _binance_aggressor_side(buyer_is_maker) -> str:
+        # Binance aggTrade m=true means buyer was maker; aggressive taker sold.
+        if buyer_is_maker is True:
+            return "sell"
+        if buyer_is_maker is False:
+            return "buy"
+        return "unknown"
+
+    async def _binance_loop(self):
+        url = "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/btcusdt@aggTrade"
+        while self._running:
+            try:
+                async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
+                    self.binance.connected = True
+                    self.binance.last_error = None
+                    async for raw in ws:
+                        if not self._running:
+                            break
+                        envelope = json.loads(raw)
+                        msg = envelope.get("data", envelope)
+                        stream = str(envelope.get("stream", ""))
+                        now = time.time()
+                        if "depth20" in stream or ("bids" in msg and "asks" in msg):
+                            bids = [(float(p), float(q)) for p, q in msg.get("bids", []) if float(p) > 0 and float(q) > 0]
+                            asks = [(float(p), float(q)) for p, q in msg.get("asks", []) if float(p) > 0 and float(q) > 0]
+                            if bids and asks and max(p for p, _ in bids) < min(p for p, _ in asks):
+                                self.binance.bids = dict(bids)
+                                self.binance.asks = dict(asks)
+                                self.binance.last_book_ts = now
+                        elif "aggTrade" in stream or msg.get("e") == "aggTrade":
+                            price, qty = float(msg["p"]), float(msg["q"])
+                            if price > 0 and qty > 0:
+                                side = self._binance_aggressor_side(msg.get("m"))
+                                self.binance.last_trade_price, self.binance.last_trade_ts = price, now
+                                self.binance.trades.append((now, price, qty, side))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.binance.connected = False
+                self.binance.last_error = f"{type(exc).__name__}: {exc}"
+                self.binance.reconnects += 1
+                await asyncio.sleep(1.5)
 
     async def _coinbase_loop(self):
         url = "wss://ws-feed.exchange.coinbase.com"
