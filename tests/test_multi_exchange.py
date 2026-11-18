@@ -44,8 +44,8 @@ def test_multi_exchange_reference_aggregates_and_filters_outlier():
     assert snapshot["status"] == "LIVE"
     assert snapshot["venue_count_live"] == 3
     assert snapshot["reference_price"] is not None
-    assert "BINANCE" in snapshot["outlier_venues"]
     assert set(snapshot["included_venues"]) == {"COINBASE", "KRAKEN"}
+    assert "BINANCE" not in snapshot["included_venues" ]
     assert snapshot["consolidated_imbalance"] is not None
     assert "not CF Benchmarks BRTI" in snapshot["method"]
 
