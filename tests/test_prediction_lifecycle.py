@@ -1,6 +1,6 @@
 from app.database import PredictionLedger
 from app.feeds import MarketDataHub
-from app.models import ContractInfo, MarketRegime, PredictionRecord, Signal
+from app.models import ContractInfo, FinalDecisionReport, MarketRegime, PredictionRecord, Signal
 from app.orchestrator import PredictorOrchestrator
 
 
@@ -196,3 +196,133 @@ def test_existing_snapshot_history_migrates_to_one_legacy_score_record(tmp_path)
     with ledger._connection() as conn:
         rows = conn.execute("SELECT COUNT(*) AS n FROM predictions WHERE is_official_lock = 0").fetchone()
         assert rows["n"] == 2
+
+
+
+def _final_report(signal: Signal) -> FinalDecisionReport:
+    return FinalDecisionReport(
+        signal=signal,
+        confidence=72.0 if signal != Signal.WAIT else 0.0,
+        up_probability=0.72 if signal == Signal.UP else 0.28 if signal == Signal.DOWN else 0.5,
+        down_probability=0.28 if signal == Signal.UP else 0.72 if signal == Signal.DOWN else 0.5,
+        agreement_status="TEST",
+        rationale="Deterministic lifecycle test",
+    )
+
+
+def _evaluate_sequence(orchestrator, hub, ticker, start, signals, remaining=500.0):
+    snapshots = []
+    close_ts = start + remaining
+    for offset, signal in enumerate(signals):
+        ts = start + offset
+        hub.kalshi_contract = ContractInfo(
+            ticker=ticker,
+            strike_price=90000.0,
+            strike_source="KALSHI_OFFICIAL",
+            open_timestamp=start - 10.0,
+            close_timestamp=close_ts,
+            seconds_remaining=close_ts - ts,
+            checkpoint_seconds_remaining=(close_ts - ts) % 180 or 180.0,
+            is_official_kalshi=True,
+            yes_bid_dollars=0.20,
+            yes_ask_dollars=0.21,
+            no_bid_dollars=0.79,
+            no_ask_dollars=0.80,
+        )
+        hub.last_kalshi_ts = ts
+        hub.last_spot_ts = ts
+        hub.live_price = 90010.0
+        orchestrator.final_engine.decide = lambda *args, _signal=signal: _final_report(_signal)
+        snapshots.append(orchestrator.evaluate_once(now=ts))
+    return snapshots
+
+
+def test_transient_directional_signal_is_not_officially_locked(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "transient-direction.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-TRANSIENT", now)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    _evaluate_sequence(orchestrator, hub, contract.ticker, now, [Signal.UP, Signal.WAIT])
+
+    assert ledger.get_recent_predictions() == []
+    assert not ledger.has_official_prediction_lock(contract.ticker)
+    assert orchestrator._directional_lock_candidate_count == 0
+
+
+def test_direction_reversal_resets_confirmation_and_requires_two_new_matches(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "reversal-confirmation.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-REVERSAL", now)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    _evaluate_sequence(
+        orchestrator, hub, contract.ticker, now,
+        [Signal.UP, Signal.DOWN, Signal.DOWN],
+    )
+    assert ledger.get_recent_predictions() == []
+    assert orchestrator._directional_lock_candidate == Signal.DOWN
+    assert orchestrator._directional_lock_candidate_count == 2
+
+    _evaluate_sequence(orchestrator, hub, contract.ticker, now + 3.0, [Signal.DOWN])
+    records = ledger.get_recent_predictions()
+    assert len(records) == 1
+    assert records[0].final_signal == Signal.DOWN
+
+
+def test_two_consecutive_matching_directions_create_one_immutable_lock(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "confirmed-direction.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-CONFIRMED", now)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    _evaluate_sequence(orchestrator, hub, contract.ticker, now, [Signal.UP, Signal.UP, Signal.DOWN])
+
+    records = ledger.get_recent_predictions()
+    assert len(records) == 1
+    assert records[0].final_signal == Signal.UP
+    assert records[0].epoch_ts == now + 1.0
+    assert ledger.get_scoreboard().total_predictions == 1
+
+
+def test_unconfirmed_direction_at_final_lockout_becomes_wait(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "cutoff-confirmation.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-CUTOFF", now, remaining=66.0)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    _evaluate_sequence(
+        orchestrator, hub, contract.ticker, now,
+        [Signal.UP, Signal.UP], remaining=65.0,
+    )
+
+    records = ledger.get_recent_predictions()
+    assert len(records) == 1
+    assert records[0].final_signal == Signal.WAIT
+
+
+def test_contract_rollover_resets_directional_confirmation(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "rollover-confirmation.db"))
+    now = 1_800_000_000.0
+    first = _official_contract("KXBTC15M-OLD", now)
+    hub = _ready_hub(first, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    orchestrator.final_engine.decide = lambda *args: _final_report(Signal.UP)
+    orchestrator.evaluate_once(now=now)
+    assert orchestrator._directional_lock_candidate_count == 1
+
+    next_now = now + 1.0
+    second = _official_contract("KXBTC15M-NEW", next_now)
+    hub.kalshi_contract = second
+    hub.last_kalshi_ts = next_now
+    hub.last_spot_ts = next_now
+    hub.live_price = 90100.0
+    orchestrator.evaluate_once(now=next_now)
+
+    assert not ledger.has_official_prediction_lock(second.ticker)
+    assert orchestrator._directional_lock_candidate_ticker == second.ticker
+    assert orchestrator._directional_lock_candidate_count == 1
