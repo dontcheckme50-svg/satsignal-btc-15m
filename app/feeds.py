@@ -179,19 +179,34 @@ class MarketDataHub:
 
     async def _spot_stream_loop(self) -> None:
         use_coinbase = False
+        next_binance_probe = 0.0
         while self._running:
+            # Coinbase is a fallback, not a permanent one-way switch. Probe
+            # Binance again periodically so a recovered primary feed can resume.
+            attempt_coinbase = use_coinbase and time.monotonic() < next_binance_probe
             try:
-                if not use_coinbase: await self._run_binance_ws()
-                else: await self._run_coinbase_ws()
+                if attempt_coinbase:
+                    await self._run_coinbase_ws()
+                else:
+                    await self._run_binance_ws()
+                    use_coinbase = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                use_coinbase = True if ("451" in str(exc) or "403" in str(exc)) else (not use_coinbase)
+                if not attempt_coinbase:
+                    use_coinbase = True
+                    next_binance_probe = time.monotonic() + (
+                        60.0 if ("451" in str(exc) or "403" in str(exc)) else 15.0
+                    )
+                # Keep fallback retries alive, but avoid tight reconnect loops.
                 await asyncio.sleep(1.5)
             else:
-                # A clean server-side close is still a disconnect; avoid a
-                # tight reconnect loop and allow freshness to decay.
+                # A clean server-side close is still a disconnect. If the
+                # primary closed, fall back and schedule a later primary probe.
                 if self._running:
+                    if not attempt_coinbase:
+                        use_coinbase = True
+                        next_binance_probe = time.monotonic() + 15.0
                     await asyncio.sleep(1.5)
 
     @staticmethod
