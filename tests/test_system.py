@@ -677,6 +677,12 @@ def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch, tmp_
     hub = MarketDataHub()
     now = time.time()
     hub.ingest_trade(now, 90000.0, 0.2, False, "TEST")
+    hub.kalshi_contract = _contract(
+        open_timestamp=now - 10.0,
+        close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub.last_kalshi_ts = now
     hub.bars_1s.extend([
         (int(now - 5), 89999.0, 0.1),
         (int(now + 100), 999999.0, 100.0),
