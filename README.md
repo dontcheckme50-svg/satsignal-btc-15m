@@ -44,6 +44,23 @@ Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_
 - Kalshi polling accepts only currently active KXBTC15M markets with a valid official `floor_strike`.
 - BRTI polling is an optional authenticated integration attempt. It is displayed as a feed status but is not currently incorporated into five-engine scoring. Validate endpoint, entitlement and payload before relying on it.
 
+## Multi-exchange reference (shadow mode)
+
+A read-only shadow market-data layer runs independently of the five prediction engines:
+
+- Coinbase BTC/USD Level 2 book and matches stream.
+- Kraken BTC/USD book and trades WebSocket.
+- Bitstamp BTC/USD public order-book and ticker polling.
+- Binance BTC/USDT is displayed as a comparison venue only and is not mixed into the USD reference.
+
+The composite uses USD-quoted venue mid-prices, rejects venues more than 0.35% from the median, then calculates a capped depth-weighted mid-price from accepted venues. Near-market liquidity and imbalance are measured within 0.25% of mid. A composite is marked LIVE only when at least two accepted USD venues are fresh; otherwise it is PARTIAL or UNAVAILABLE. This is an independent estimate, **not official CF Benchmarks BRTI**.
+
+The shadow feed does not affect predictions or execution. It is visible on the dashboard and through:
+
+- `/api/multi-exchange` — current venue/reference snapshot and comparison versus primary spot, official BRTI (when fresh), and strike.
+- `/api/multi-exchange/history` — persisted observations.
+- Shadow observations are recorded to SQLite every five seconds while the orchestrator is evaluating and a primary spot price is available. Source ages are stored; stale spot/BRTI values are excluded from comparisons.
+
 ## Tests
 
 ```powershell
