@@ -110,9 +110,10 @@ class PredictorOrchestrator:
                 self.last_multi_exchange_logged_ts = ts
             except Exception:
                 logger.exception("Failed to persist multi-exchange shadow observation")
-        ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), list(self.hub.bars_1s), list(self.hub.bids), list(self.hub.asks))
+        observed_bars = [bar for bar in self.hub.bars_1s if bar[0] <= ts]
+        ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), observed_bars, list(self.hub.bids), list(self.hub.asks))
         weakness = self.weakness_engine.analyze(ev, spot_age)
-        regime = self.regime_engine.analyze(ev, weakness, list(self.hub.bars_1s))
+        regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
         self.latest_baseline_z_prob = float(norm.cdf(EvidenceEngine._strike_z_score(live_price, new_contract.strike_price, new_contract.seconds_remaining, ev.volatility_annualized)))
