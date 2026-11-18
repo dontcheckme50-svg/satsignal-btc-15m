@@ -35,9 +35,10 @@ class EvidenceEngine:
         large_asks = sum(q for _, q in asks[:10] if med_sz > 0 and q >= 2.5 * med_sz)
         large_bias = (large_bids - large_asks) / (large_bids + large_asks) if (large_bids + large_asks) > 0 else 0.0
         # Only recent, source-observed bars may influence short-horizon signals.
-        # A fresh spot tick must not make an old candle history look current.
+        # Rebuild a one-second time series so sparse trade bars do not make
+        # "last 30 observations" silently mean an arbitrary number of seconds.
         valid_bars = [b for b in bars_1s if now - 300.0 <= b[0] <= now]
-        prices = [b[1] for b in valid_bars[-300:]] + [live_price]
+        prices = self._resample_prices_to_seconds(valid_bars, now, live_price)
         rsi_14 = self._compute_rsi(prices[-60:], period=14)
         ann_vol = self._compute_annualized_vol(prices)
         p_30s = prices[-30] if len(prices) >= 30 else prices[0]
@@ -74,6 +75,27 @@ class EvidenceEngine:
         raw_score = float(np.clip(((buy_pct - 50.0) / 50.0) * 30.0 + (0.65 * obi + 0.35 * large_bias) * 25.0 + (mom_score / 100.0) * 25.0 + float(np.clip(strike_z * 12.0, -20.0, 20.0)), -100.0, 100.0))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
         return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6))
+
+    @staticmethod
+    def _resample_prices_to_seconds(
+        bars: List[Tuple[int, float, float]], now: float, live_price: float
+    ) -> List[float]:
+        """Return at most 301 one-second prices, carrying the last observed trade forward."""
+        end_sec = int(now)
+        start_sec = max(end_sec - 300, min((int(bar[0]) for bar in bars), default=end_sec))
+        observed = {}
+        for ts, price, _volume in bars:
+            sec, value = int(ts), float(price)
+            if start_sec <= sec <= end_sec and math.isfinite(value) and value > 0:
+                observed[sec] = value
+        observed[end_sec] = float(live_price)
+        result = []
+        last_price = float(live_price)
+        for sec in range(start_sec, end_sec + 1):
+            if sec in observed:
+                last_price = observed[sec]
+            result.append(last_price)
+        return result
 
     @staticmethod
     def _compute_rsi(prices: List[float], period: int = 14) -> float:
