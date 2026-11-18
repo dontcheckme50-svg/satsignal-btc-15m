@@ -134,9 +134,46 @@ class PredictorOrchestrator:
         early = self.early_engine.analyze(ev, weakness, new_contract)
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
         self.latest_baseline_z_prob = float(norm.cdf(EvidenceEngine._strike_z_score(live_price, new_contract.strike_price, new_contract.seconds_remaining, ev.volatility_annualized)))
-        if record_to_db and new_contract.is_official_kalshi and (self.last_logged_ts == 0.0 or ts - self.last_logged_ts >= 30.0) and new_contract.seconds_remaining >= settings.final_lockout_seconds:
-            self.ledger.record_prediction(PredictionRecord(contract_ticker=new_contract.ticker, timestamp_iso=iso_now(ts), epoch_ts=ts, strike_price=new_contract.strike_price, btc_price_at_pred=live_price, seconds_remaining=round(new_contract.seconds_remaining, 1), main_signal=ev.signal, early_signal=early.signal, final_signal=final.signal, confidence=final.confidence, up_prob=final.up_probability, down_prob=final.down_probability, regime=regime.regime))
+        if record_to_db and new_contract.is_official_kalshi and (self.last_logged_ts == 0.0 or ts - self.last_logged_ts >= 30.0):
+            # Save changing engine state as an observation, not a scored prediction.
+            observation_payload = {
+                "contract": new_contract.model_dump(),
+                "evidence": ev.model_dump(),
+                "weakness": weakness.model_dump(),
+                "regime": regime.model_dump(),
+                "early": early.model_dump(),
+                "final": final.model_dump(),
+                "feeds": [feed.model_dump() for feed in self.hub.get_feed_statuses()],
+            }
+            self.ledger.record_prediction_observation(
+                contract_ticker=new_contract.ticker,
+                epoch_ts=ts,
+                seconds_remaining=round(new_contract.seconds_remaining, 1),
+                payload=observation_payload,
+            )
             self.last_logged_ts = ts
+
+        # A contract gets one immutable official score record. Directional
+        # decisions lock as soon as the existing Final Decision Engine is
+        # actionable. If no direction is established, lock WAIT at the
+        # final-entry lockout boundary so the contract still has one outcome.
+        lock_due = final.signal != Signal.WAIT or new_contract.seconds_remaining <= settings.final_lockout_seconds
+        if record_to_db and new_contract.is_official_kalshi and lock_due and not self.ledger.has_official_prediction_lock(new_contract.ticker):
+            self.ledger.record_prediction(PredictionRecord(
+                contract_ticker=new_contract.ticker,
+                timestamp_iso=iso_now(ts),
+                epoch_ts=ts,
+                strike_price=new_contract.strike_price,
+                btc_price_at_pred=live_price,
+                seconds_remaining=round(new_contract.seconds_remaining, 1),
+                main_signal=ev.signal,
+                early_signal=early.signal,
+                final_signal=final.signal,
+                confidence=final.confidence,
+                up_prob=final.up_probability,
+                down_prob=final.down_probability,
+                regime=regime.regime,
+            ))
         engines_summary = EngineStatusSummary(
             engine_a_evidence={"status": "ACTIVE", "signal": ev.signal.value, "raw_score": ev.raw_score, "structure": ev.structure_bias},
             engine_b_weakness={"status": "DEGRADED_FEED" if weakness.feed_degraded else "ACTIVE", "weakness_score": weakness.weakness_score, "flags": weakness.flags},
