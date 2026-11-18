@@ -67,18 +67,29 @@ class PredictorOrchestrator:
         return ContractInfo(ticker=ticker, strike_price=strike, strike_source="SYNTHETIC_OPEN_PROXY", open_timestamp=window_open, close_timestamp=window_close, seconds_remaining=rem, checkpoint_seconds_remaining=cp_rem, is_official_kalshi=False)
 
     async def reconcile_unsettled_contracts(self, current_ticker: str, fallback_price: float) -> None:
-        for old_ticker in self.ledger.get_unsettled_contract_tickers():
-            if old_ticker == current_ticker: continue
-            if old_ticker.startswith("KXBTC15M"):
-                verified = await self.hub.fetch_verified_kalshi_settlement(old_ticker)
-                if verified is not None:
-                    outcome, exp_val = verified
-                    self.ledger.settle_contract(old_ticker, settlement_price=(exp_val if exp_val is not None else fallback_price), official_result=outcome, settlement_source="KALSHI_VERIFIED")
-            else:
-                # Synthetic contracts have no official settlement source and no
-                # captured close-price snapshot. Never grade them with a later
-                # contract's fallback price; leave them explicitly unsettled.
-                continue
+        # Keep reconciliation bounded so a historical backlog cannot stall the
+        # prediction loop for dozens of sequential HTTP timeouts.
+        pending = [ticker for ticker in self.ledger.get_unsettled_contract_tickers() if ticker != current_ticker][:5]
+        semaphore = asyncio.Semaphore(3)
+
+        async def verify(ticker: str):
+            async with semaphore:
+                try:
+                    return ticker, await self.hub.fetch_verified_kalshi_settlement(ticker)
+                except Exception as exc:
+                    logger.warning("Settlement verification failed for %s: %s", ticker, exc)
+                    return ticker, None
+
+        results = await asyncio.gather(*(verify(ticker) for ticker in pending))
+        for old_ticker, verified in results:
+            if verified is not None:
+                outcome, exp_val = verified
+                self.ledger.settle_contract(
+                    old_ticker,
+                    settlement_price=(exp_val if exp_val is not None else fallback_price),
+                    official_result=outcome,
+                    settlement_source="KALSHI_VERIFIED",
+                )
 
     def evaluate_once(self, now: Optional[float] = None, record_to_db: bool = True) -> Optional[DashboardSnapshot]:
         ts = now if now is not None else time.time()
