@@ -73,3 +73,16 @@ def test_health_reports_stopped_when_worker_is_not_running():
 
     assert health["health"] == "STOPPED"
     assert health["running"] is False
+
+
+
+def test_health_reports_degraded_for_execution_failure_even_with_fresh_snapshot():
+    orchestrator = _health_only_orchestrator()
+    orchestrator.last_cycle_success_ts = time.time()
+    orchestrator.latest_snapshot = object()
+    orchestrator.last_execution_error = "RuntimeError: paper executor failed"
+
+    health = orchestrator.get_runtime_health()
+
+    assert health["health"] == "DEGRADED"
+    assert health["last_execution_error"] == "RuntimeError: paper executor failed"
