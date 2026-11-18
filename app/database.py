@@ -256,6 +256,36 @@ class PredictionLedger:
         settled = int(row["settled"] or 0)
         wins = int(row["wins"] or 0)
         baseline_accuracy = round(wins / settled * 100.0, 2) if settled else None
+        with self._connection() as conn:
+            paired_rows = conn.execute(
+                """SELECT brti_side_at_lock, spot_side_at_lock, actual_outcome
+                   FROM predictions
+                   WHERE is_official_lock = 1 AND settled = 1
+                     AND actual_outcome IN ('UP', 'DOWN')
+                     AND brti_side_at_lock IN ('UP', 'DOWN')
+                     AND spot_side_at_lock IN ('UP', 'DOWN')"""
+            ).fetchall()
+        paired_count = len(paired_rows)
+        brti_hits = sum(r["brti_side_at_lock"] == r["actual_outcome"] for r in paired_rows)
+        spot_hits = sum(r["spot_side_at_lock"] == r["actual_outcome"] for r in paired_rows)
+        paired_comparison = {
+            "sample_size": paired_count,
+            "brti": {
+                "correct": brti_hits,
+                "incorrect": paired_count - brti_hits,
+                "accuracy_pct": round(brti_hits / paired_count * 100.0, 2) if paired_count else None,
+            },
+            "spot": {
+                "correct": spot_hits,
+                "incorrect": paired_count - spot_hits,
+                "accuracy_pct": round(spot_hits / paired_count * 100.0, 2) if paired_count else None,
+            },
+            "brti_minus_spot_pct_points": (
+                round((brti_hits - spot_hits) / paired_count * 100.0, 2)
+                if paired_count else None
+            ),
+            "note": "Paired settled locks only; descriptive comparison, not proof of predictive lift.",
+        }
         for cohort in cohorts:
             cohort["vs_baseline_pct_points"] = (
                 round(cohort["accuracy_pct"] - baseline_accuracy, 2)
@@ -268,6 +298,7 @@ class PredictionLedger:
                 "accuracy_pct": baseline_accuracy,
             },
             "cohorts": cohorts,
+            "brti_vs_spot": paired_comparison,
             "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
         }
 
