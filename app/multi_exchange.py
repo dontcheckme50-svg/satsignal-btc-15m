@@ -28,7 +28,10 @@ class VenueBook:
         price, qty = float(price), float(qty)
         if not math.isfinite(price) or price <= 0 or not math.isfinite(qty):
             return
-        book = self.bids if side.lower() in ("buy", "bid", "b") else self.asks
+        normalized_side = str(side or "").lower()
+        if normalized_side not in ("buy", "bid", "b", "sell", "ask", "a"):
+            return
+        book = self.bids if normalized_side in ("buy", "bid", "b") else self.asks
         if qty <= 0:
             book.pop(price, None)
         else:
@@ -36,7 +39,7 @@ class VenueBook:
 
     def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180)) -> dict:
         now = time.time() if now is None else now
-        latest_trade_age = max(0.0, now - self.last_trade_ts) if self.last_trade_ts else None
+        latest_trade_age = (now - self.last_trade_ts) if self.last_trade_ts and now >= self.last_trade_ts else None
         result = {
             "latest_trade_age_seconds": round(latest_trade_age, 3) if latest_trade_age is not None else None,
             "windows": {},
