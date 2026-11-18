@@ -276,12 +276,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("strike-dist").textContent = `${d.evidence.distance_from_strike>=0?"+":""}${d.evidence.distance_from_strike.toFixed(2)} (${d.evidence.distance_pct.toFixed(3)}%)`;
     document.getElementById("regime-val").textContent = d.regime.regime;
     document.getElementById("agreement-val").textContent = d.final.agreement_status;
-    document.getElementById("eng-a").innerHTML = `${sigBadge(d.evidence.signal)} Score ${d.evidence.raw_score}`;
+    document.getElementById("eng-a").innerHTML = `${sigBadge(d.evidence.signal)} Score ${d.evidence.raw_score} · ${d.engines.engine_a_evidence.status}`;
     document.getElementById("eng-b").textContent = `Weakness ${d.weakness.weakness_score}/100`;
     document.getElementById("dot-b").className = `feed-dot st-${d.engines.engine_b_weakness.status}`;
-    document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%)`;
-    document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}%`;
-    document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}%`;
+    document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%) · ${d.engines.engine_c_regime.status}`;
+    document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}% · ${d.engines.engine_d_early.status}`;
+    document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}% · ${d.engines.engine_e_final.status}`;
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
     document.getElementById("buy-bar").style.width = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-bar").style.width = `${d.evidence.selling_pressure_pct}%`;
