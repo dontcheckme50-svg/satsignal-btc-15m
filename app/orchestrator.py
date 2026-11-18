@@ -42,6 +42,9 @@ class PredictorOrchestrator:
         self.last_execution_error: Optional[str] = None
         self.last_settlement_error: Optional[str] = None
         self._settlement_task: Optional[asyncio.Task] = None
+        # Rotate bounded settlement batches so an old unresolved contract
+        # cannot permanently starve newer contracts later in the backlog.
+        self._settlement_cursor_ticker: Optional[str] = None
 
     def _reset_directional_lock_candidate(self) -> None:
         self._directional_lock_candidate_ticker = None
@@ -82,7 +85,21 @@ class PredictorOrchestrator:
         # price must never be attributed to an already-closed contract.
         # Keep reconciliation bounded so a historical backlog cannot stall the
         # prediction loop for dozens of sequential HTTP timeouts.
-        pending = [ticker for ticker in self.ledger.get_unsettled_contract_tickers() if ticker != current_ticker][:5]
+        pending = [
+            ticker for ticker in self.ledger.get_unsettled_contract_tickers()
+            if ticker != current_ticker
+        ]
+        if not pending:
+            self._settlement_cursor_ticker = None
+            return
+        start_index = 0
+        if self._settlement_cursor_ticker in pending:
+            start_index = (pending.index(self._settlement_cursor_ticker) + 1) % len(pending)
+        batch = [
+            pending[(start_index + offset) % len(pending)]
+            for offset in range(min(5, len(pending)))
+        ]
+        self._settlement_cursor_ticker = batch[-1]
         semaphore = asyncio.Semaphore(3)
 
         async def verify(ticker: str):
@@ -93,7 +110,7 @@ class PredictorOrchestrator:
                     logger.warning("Settlement verification failed for %s: %s", ticker, exc)
                     return ticker, None
 
-        results = await asyncio.gather(*(verify(ticker) for ticker in pending))
+        results = await asyncio.gather(*(verify(ticker) for ticker in batch))
         for old_ticker, verified in results:
             if verified is not None:
                 outcome, exp_val = verified
