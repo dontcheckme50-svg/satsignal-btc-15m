@@ -285,3 +285,40 @@ def test_future_trade_timestamp_is_not_reported_as_zero_age():
     flow = venue.trade_flow_snapshot(now=1000.0)
 
     assert flow["latest_trade_age_seconds"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_name,venue_name", [
+    ("_binance_loop", "binance"),
+    ("_coinbase_loop", "coinbase"),
+    ("_kraken_loop", "kraken"),
+])
+async def test_clean_websocket_close_marks_venue_disconnected_and_backoffs(monkeypatch, worker_name, venue_name):
+    reference = MultiExchangeReference()
+    reference._running = True
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def empty():
+                if False:
+                    yield None
+            return empty()
+
+    monkeypatch.setattr(multi_exchange_module.websockets, "connect", lambda *args, **kwargs: FakeWebSocket())
+
+    async def stop_on_backoff(_seconds):
+        reference._running = False
+
+    monkeypatch.setattr(multi_exchange_module.asyncio, "sleep", stop_on_backoff)
+    await getattr(reference, worker_name)()
+
+    venue = getattr(reference, venue_name)
+    assert venue.connected is False
+    assert venue.reconnects == 1
+    assert "closed cleanly" in venue.last_error
