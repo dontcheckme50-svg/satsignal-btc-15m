@@ -103,6 +103,10 @@ class PredictorOrchestrator:
             self.last_logged_ts = 0.0
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
+        book_age = safe_age_seconds(self.hub.last_book_ts, ts)
+        book_fresh = book_age is not None and book_age <= settings.stale_feed_threshold_sec
+        evidence_bids = list(self.hub.bids) if book_fresh else []
+        evidence_asks = list(self.hub.asks) if book_fresh else []
         multi_reference = self.hub.get_multi_exchange_snapshot()
         multi_reference["strike_price"] = new_contract.strike_price
         reference_price = multi_reference.get("reference_price")
@@ -124,8 +128,8 @@ class PredictorOrchestrator:
             except Exception:
                 logger.exception("Failed to persist multi-exchange shadow observation")
         observed_bars = [bar for bar in self.hub.bars_1s if bar[0] <= ts]
-        ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), observed_bars, list(self.hub.bids), list(self.hub.asks))
-        weakness = self.weakness_engine.analyze(ev, spot_age)
+        ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), observed_bars, evidence_bids, evidence_asks)
+        weakness = self.weakness_engine.analyze(ev, spot_age, book_age)
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
