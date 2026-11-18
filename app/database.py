@@ -205,6 +205,11 @@ class PredictionLedger:
             ).fetchall()
             return [r["contract_ticker"] for r in rows]
 
+    def count_trades_for_ticker(self, contract_ticker: str) -> int:
+        with self._connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM trades WHERE contract_ticker = ?", (contract_ticker,)).fetchone()
+            return int(row["c"])
+
     def count_open_contracts_for_ticker(self, contract_ticker: str) -> int:
         with self._connection() as conn:
             row = conn.execute("SELECT COALESCE(SUM(contracts), 0) AS c FROM trades WHERE contract_ticker = ? AND status = 'OPEN'", (contract_ticker,)).fetchone()
