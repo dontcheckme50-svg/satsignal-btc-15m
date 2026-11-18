@@ -262,7 +262,7 @@ class MarketDataHub:
                 name=f"Multi-Exchange {venue['venue']}",
                 status=venue["status"],
                 age_seconds=venue.get("age_seconds"),
-                detail=f"Quote={venue['quote']} | mid={venue.get('mid')} | imbalance={venue.get('imbalance')} | {venue.get('last_error') or ''}",
+                detail=f"Quote={venue['quote']} | mid={venue.get('mid')} | imbalance={venue.get('imbalance')}",
             ))
         venue_statuses.append(FeedStatus(
             name="Multi-Exchange Reference",
