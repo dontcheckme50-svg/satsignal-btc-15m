@@ -63,11 +63,12 @@ class VenueBook:
 
 
 class MultiExchangeReference:
-    """Read-only, shadow-mode USD reference from independent public exchange feeds."""
+    """Read-only shadow reference from independent public USD venues."""
 
     def __init__(self):
         self.coinbase = VenueBook("COINBASE", "USD")
         self.kraken = VenueBook("KRAKEN", "USD")
+        self.bitstamp = VenueBook("BITSTAMP", "USD")
         self.binance = VenueBook("BINANCE", "USDT")
         self._running = False
         self._tasks = []
@@ -78,7 +79,8 @@ class MultiExchangeReference:
         self._running = True
         self._tasks = [
             asyncio.create_task(self._coinbase_loop(), name="multi-coinbase"),
-            asyncio.create_task(self._kraken_loop(), name="multi-kraken"),\n            asyncio.create_task(self._bitstamp_poll_loop(), name="multi-bitstamp"),
+            asyncio.create_task(self._kraken_loop(), name="multi-kraken"),
+            asyncio.create_task(self._bitstamp_poll_loop(), name="multi-bitstamp"),
         ]
 
     async def stop(self):
@@ -125,7 +127,7 @@ class MultiExchangeReference:
                         elif typ == "match" and msg.get("product_id") == "BTC-USD":
                             p, q = float(msg["price"]), float(msg["size"])
                             self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
-                            # Coinbase Exchange "side" is maker-side; retain raw side only.
+                            # Coinbase Exchange side is maker-side; retain raw side only.
                             self.coinbase.trades.append((now, p, q, str(msg.get("side", "")).lower()))
             except asyncio.CancelledError:
                 raise
@@ -150,17 +152,15 @@ class MultiExchangeReference:
                         if not self._running:
                             break
                         msg = json.loads(raw)
-                        channel = msg.get("channel")
-                        data_rows = msg.get("data", [])
+                        channel, data_rows = msg.get("channel"), msg.get("data", [])
                         now = time.time()
                         if channel == "book":
                             for row in data_rows:
                                 for side_key, side in (("bids", "bid"), ("asks", "ask")):
-                                    levels = row.get(side_key, [])
                                     target = self.kraken.bids if side == "bid" else self.kraken.asks
                                     if msg.get("type") == "snapshot":
                                         target.clear()
-                                    for level in levels:
+                                    for level in row.get(side_key, []):
                                         price, qty = float(level["price"]), float(level["qty"])
                                         if qty <= 0:
                                             target.pop(price, None)
@@ -183,11 +183,12 @@ class MultiExchangeReference:
     async def _bitstamp_poll_loop(self):
         book_url = "https://www.bitstamp.net/api/v2/order_book/btcusd/?group=1"
         ticker_url = "https://www.bitstamp.net/api/v2/ticker/btcusd/"
-        while self._running:
-            try:
-                async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=4)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while self._running:
+                try:
                     async def get_json(url):
-                        async with session.get(url, timeout=4) as response:
+                        async with session.get(url) as response:
                             response.raise_for_status()
                             return await response.json()
                     book_data, ticker_data = await asyncio.gather(get_json(book_url), get_json(ticker_url))
@@ -204,13 +205,13 @@ class MultiExchangeReference:
                     if last:
                         self.bitstamp.last_trade_price = float(last)
                         self.bitstamp.last_trade_ts = now
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self.bitstamp.connected = False
-                self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
-                self.bitstamp.reconnects += 1
-            await asyncio.sleep(2.0)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self.bitstamp.connected = False
+                    self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
+                    self.bitstamp.reconnects += 1
+                await asyncio.sleep(2.0)
 
     def get_snapshot(self, now: Optional[float] = None) -> dict:
         now = now or time.time()
@@ -226,7 +227,6 @@ class MultiExchangeReference:
             median = sorted_prices[len(sorted_prices) // 2] if len(sorted_prices) % 2 else sum(sorted_prices[len(sorted_prices)//2-1:len(sorted_prices)//2+1]) / 2
             accepted = [v for v in usd_live if abs(v["mid"] - median) / median <= 0.0035]
             excluded = [v["venue"] for v in usd_live if v not in accepted]
-            # Weight accepted USD venues by near-market quote depth, capped to prevent one venue dominating.
             weights = [max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0)) for v in accepted]
             if len(accepted) >= 2:
                 composite = sum(v["mid"] * w for v, w in zip(accepted, weights)) / sum(weights)
