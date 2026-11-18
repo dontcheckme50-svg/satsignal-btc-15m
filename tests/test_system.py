@@ -986,3 +986,42 @@ def test_coinbase_primary_trade_side_flag_is_not_coerced():
     assert hub._coinbase_is_buyer_maker("sell") is False
     assert hub._coinbase_is_buyer_maker(None) is None
     assert hub._coinbase_is_buyer_maker("unknown") is None
+
+def test_official_prediction_lock_is_idempotent_per_contract(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "one-lock-per-contract.db"))
+    first = ledger.record_prediction(_prediction_record("KXBTC15M-LOCK-ONCE", final=Signal.UP))
+    duplicate = ledger.record_prediction(_prediction_record("KXBTC15M-LOCK-ONCE", final=Signal.DOWN, ts=1794873660.0))
+
+    assert first > 0
+    assert duplicate == first
+    rows = ledger.get_recent_predictions(limit=10)
+    assert len(rows) == 1
+    assert rows[0].final_signal == Signal.UP
+    assert ledger.has_official_prediction_lock("KXBTC15M-LOCK-ONCE")
+
+
+def test_official_settlement_is_idempotent_and_does_not_regrade_lock(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "settle-once.db"))
+    ledger.record_prediction(_prediction_record("KXBTC15M-SETTLE-ONCE", final=Signal.UP))
+
+    first_update = ledger.settle_contract(
+        "KXBTC15M-SETTLE-ONCE",
+        settlement_price=90020.0,
+        official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    )
+    duplicate_update = ledger.settle_contract(
+        "KXBTC15M-SETTLE-ONCE",
+        settlement_price=89980.0,
+        official_result="DOWN",
+        settlement_source="LATE_CONFLICTING_RETRY",
+    )
+
+    assert first_update == 1
+    assert duplicate_update == 0
+    row = ledger.get_recent_predictions(limit=1)[0]
+    assert row.settled is True
+    assert row.actual_outcome == "UP"
+    assert row.final_won is True
+    assert row.settlement_source == "KALSHI_VERIFIED"
+
