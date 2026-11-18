@@ -22,6 +22,8 @@ def _health_only_orchestrator():
         last_spot_ts=0.0,
         last_book_ts=0.0,
         last_kalshi_ts=0.0,
+        active_spot_source="BINANCE_SPOT",
+        last_book_source="BINANCE_SPOT",
         brti_status="UNAVAILABLE",
     )
     return orchestrator
@@ -150,3 +152,32 @@ def test_market_data_readiness_degrades_when_order_book_is_stale():
     assert health["market_data_health"] == "DEGRADED"
     assert health["market_data_ready"] is False
     assert health["order_book_age_seconds"] >= 60.0
+
+def test_market_data_readiness_degrades_when_book_source_differs_from_spot():
+    orchestrator = _health_only_orchestrator()
+    now = time.time()
+    orchestrator.last_cycle_success_ts = now
+    orchestrator.latest_snapshot = object()
+    orchestrator.hub.last_spot_ts = now
+    orchestrator.hub.last_book_ts = now
+    orchestrator.hub.last_kalshi_ts = now
+    orchestrator.hub.active_spot_source = "COINBASE_FALLBACK"
+    orchestrator.hub.last_book_source = "BINANCE_SPOT"
+    orchestrator.active_contract = ContractInfo(
+        ticker="KXBTC15M-SOURCE-MISMATCH",
+        strike_price=90000.0,
+        strike_source="KALSHI_OFFICIAL",
+        open_timestamp=now - 60.0,
+        close_timestamp=now + 840.0,
+        seconds_remaining=840.0,
+        checkpoint_seconds_remaining=120.0,
+        is_official_kalshi=True,
+    )
+
+    health = orchestrator.get_runtime_health()
+
+    assert health["health"] == "HEALTHY"
+    assert health["market_data_health"] == "DEGRADED"
+    assert health["market_data_ready"] is False
+    assert health["order_book_source_matches_spot"] is False
+
