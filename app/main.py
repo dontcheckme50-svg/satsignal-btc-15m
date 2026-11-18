@@ -2,7 +2,7 @@ import asyncio, time
 from contextlib import asynccontextmanager
 from typing import Set
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from app.config import settings
 from app.database import PredictionLedger
@@ -88,11 +88,11 @@ async def get_multi_exchange():
     return snapshot
 
 @app.get("/api/multi-exchange/history")
-async def get_multi_exchange_history(limit: int = 200):
+async def get_multi_exchange_history(limit: int = Query(default=200, ge=1, le=1000)):
     return {"observations": ledger.get_multi_exchange_reference_history(limit=limit)}
 
 @app.get("/api/history")
-async def get_history(limit: int = 50):
+async def get_history(limit: int = Query(default=50, ge=1, le=500)):
     return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
 
 @app.get("/api/scoreboard")
@@ -100,7 +100,7 @@ async def get_scoreboard():
     return ledger.get_scoreboard().model_dump()
 
 @app.get("/api/trades")
-async def get_trades(limit: int = 30):
+async def get_trades(limit: int = Query(default=30, ge=1, le=200)):
     return {"trades": [t.model_dump() for t in ledger.get_recent_trades(limit=limit)]}
 
 @app.websocket("/ws")
