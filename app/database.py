@@ -95,7 +95,8 @@ class PredictionLedger:
                 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_pred_settled ON predictions(settled);
                 CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(contract_ticker);
-                CREATE INDEX IF NOT EXISTS idx_multi_ref_epoch ON multi_exchange_reference(epoch_ts);\n                CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
+                CREATE INDEX IF NOT EXISTS idx_multi_ref_epoch ON multi_exchange_reference(epoch_ts);
+                CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
             """)
             trade_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
             if "settled_at" not in trade_columns:
