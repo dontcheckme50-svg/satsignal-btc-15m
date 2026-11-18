@@ -99,3 +99,52 @@ def test_near_market_depth_imbalance_uses_25bps_window():
 def test_bitstamp_polling_dependency_is_imported():
     # Catch startup-time NameErrors before the Bitstamp background task is launched.
     assert multi_exchange_module.aiohttp.ClientSession is not None
+
+
+
+def test_trade_flow_uses_rolling_windows_and_aggressor_delta():
+    venue = VenueBook("TEST", "USD")
+    now = 1000.0
+    venue.trades.extend([
+        (now - 5, 100.0, 0.8, "buy"),
+        (now - 3, 100.0, 0.3, "sell"),
+        (now - 20, 100.0, 0.5, "sell"),
+        (now - 70, 100.0, 0.1, "buy"),
+        (now - 200, 100.0, 1.0, "buy"),
+    ])
+    venue.last_trade_ts = now - 3
+
+    flow = venue.trade_flow_snapshot(now)
+
+    assert flow["windows"]["15"]["buy_volume_btc"] == 0.8
+    assert flow["windows"]["15"]["sell_volume_btc"] == 0.3
+    assert flow["windows"]["15"]["delta_btc"] == 0.5
+    assert flow["windows"]["60"]["delta_btc"] == 0.0
+    assert flow["windows"]["180"]["buy_volume_btc"] == 0.9
+    assert flow["windows"]["15"]["status"] == "ACTIVE"
+
+
+def test_unknown_trade_side_is_not_misclassified_as_buy_or_sell():
+    venue = VenueBook("TEST", "USD")
+    venue.trades.append((100.0, 100.0, 0.25, "unknown"))
+
+    flow = venue.trade_flow_snapshot(100.0)
+
+    assert flow["windows"]["15"]["unknown_volume_btc"] == 0.25
+    assert flow["windows"]["15"]["buy_volume_btc"] == 0.0
+    assert flow["windows"]["15"]["sell_volume_btc"] == 0.0
+    assert flow["windows"]["15"]["delta_ratio"] is None
+    assert flow["windows"]["15"]["status"] == "UNCLASSIFIED"
+
+
+def test_aggregate_cross_venue_flow_sums_btc_delta():
+    reference = MultiExchangeReference()
+    reference.coinbase.trades.append((100.0, 100.0, 0.4, "buy"))
+    reference.kraken.trades.append((100.0, 100.0, 0.2, "sell"))
+
+    snapshot = reference.get_snapshot(now=100.0)
+
+    assert snapshot["trade_flow"]["windows"]["15"]["buy_volume_btc"] == 0.4
+    assert snapshot["trade_flow"]["windows"]["15"]["sell_volume_btc"] == 0.2
+    assert snapshot["trade_flow"]["windows"]["15"]["delta_btc"] == 0.2
+    assert snapshot["trade_flow"]["windows"]["15"]["delta_ratio"] == 0.333333
