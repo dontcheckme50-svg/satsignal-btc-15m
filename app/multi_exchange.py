@@ -61,7 +61,16 @@ class VenueBook:
         }
         max_window = max(windows) if windows else 0
         # Exclude future-dated records as well as trades outside the rolling window.
-        recent_max = [trade for trade in self.trades if len(trade) == 4 and all(math.isfinite(float(v)) for v in trade[:3]) and trade[0] <= now and now - max_window <= trade[0] and trade[1] > 0 and trade[2] > 0]
+        recent_max = []
+        for trade in self.trades:
+            try:
+                ts, price, qty, side = trade
+                ts, price, qty = float(ts), float(price), float(qty)
+            except (TypeError, ValueError):
+                continue
+            if not all(math.isfinite(v) for v in (ts, price, qty)) or price <= 0 or qty <= 0 or ts > now or ts < now - max_window:
+                continue
+            recent_max.append((ts, price, qty, side))
         for window in windows:
             recent = [trade for trade in recent_max if now - window <= trade[0] <= now]
             buy_volume = sum(qty for _, _, qty, side in recent if side == "buy")
