@@ -138,6 +138,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .timers { display:flex; gap:16px; align-items:center; } .timer-box { text-align:right; }
   .big-val { font-size:1.65rem; font-weight:800; font-variant-numeric:tabular-nums; }
   .cp-val { font-size:1.15rem; font-weight:700; color:#38bdf8; font-variant-numeric:tabular-nums; }
+  .health-val { font-size:.95rem; font-weight:800; color:var(--wait); font-variant-numeric:tabular-nums; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:12px; margin-bottom:12px; }
   .card { background:linear-gradient(155deg,rgba(24,33,49,.98),rgba(17,24,37,.98)); border:1px solid var(--border); border-radius:12px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.16); transition:border-color .18s ease,transform .18s ease; } .card:hover { border-color:#344761; }
   .card h3 { font-size:.75rem; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:10px; display:flex; justify-content:space-between; }
@@ -160,7 +161,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
   <div class="header">
     <div><div class="title">SATSIGNAL BTC 15M</div><div class="sub" id="contract-meta">Connecting... | <a class="api-link" href="/docs" target="_blank">API Docs (/docs)</a></div></div>
-    <div class="timers"><div class="timer-box"><div class="cp-val" id="cp-countdown">--:--</div><div class="sub">Checkpoint (3m)</div></div><div class="timer-box"><div class="big-val" id="countdown">--:--</div><div class="sub" id="server-time">Settlement</div></div></div>
+    <div class="timers"><div class="timer-box"><div class="cp-val" id="cp-countdown">--:--</div><div class="sub">Checkpoint (3m)</div></div><div class="timer-box"><div class="big-val" id="countdown">--:--</div><div class="sub" id="server-time">Settlement</div></div><div class="timer-box"><div class="health-val" id="system-health">CHECKING</div><div class="sub" id="market-health">Market data status</div></div></div>
   </div>
   <div class="grid">
     <div class="card">
@@ -331,6 +332,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("mx-method").textContent = m.method;
     } catch(e) {}
   }
+  async function fetchOrchestratorHealth() {
+    const systemEl = document.getElementById("system-health");
+    const marketEl = document.getElementById("market-health");
+    try {
+      const res = await fetch("/api/orchestrator/health", {cache:"no-store"});
+      if (!res.ok) throw new Error("Health endpoint unavailable");
+      const h = await res.json();
+      systemEl.textContent = h.health || "UNKNOWN";
+      systemEl.style.color = h.health === "HEALTHY" ? "var(--up)" : (h.health === "DEGRADED" || h.health === "STOPPED" ? "var(--down)" : "var(--wait)");
+      marketEl.textContent = h.market_data_health === "READY" ? "MARKET DATA READY" : "MARKET DATA DEGRADED";
+      marketEl.style.color = h.market_data_health === "READY" ? "var(--up)" : "var(--wait)";
+    } catch(e) {
+      systemEl.textContent = "UNAVAILABLE";
+      systemEl.style.color = "var(--down)";
+      marketEl.textContent = "Health check not responding";
+      marketEl.style.color = "var(--wait)";
+    }
+  }
   async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
   function connectWS() {
     const wsEl = document.getElementById("ws-status");
@@ -339,7 +358,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); fetchMultiExchange(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchMultiExchange, 2000);
+  fetchInitial(); fetchMultiExchange(); fetchOrchestratorHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500);
 </script>
 </body>
 </html>"""
