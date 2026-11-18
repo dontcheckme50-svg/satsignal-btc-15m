@@ -94,8 +94,8 @@ class PredictorOrchestrator:
                     epoch_ts=ts,
                     contract_ticker=new_contract.ticker,
                     strike_price=new_contract.strike_price,
-                    primary_spot_price=live_price,
-                    official_brti_price=self.hub.official_brti_price,
+                    primary_spot_price=multi_reference.get("primary_spot_price"),
+                    official_brti_price=multi_reference.get("official_brti_price"),
                     snapshot=multi_reference,
                 )
                 self.last_multi_exchange_logged_ts = ts
