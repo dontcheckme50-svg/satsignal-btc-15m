@@ -342,9 +342,42 @@ class MarketDataHub:
     def _parse_brti_value(value) -> Optional[float]:
         try:
             parsed = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         return parsed if math.isfinite(parsed) and parsed > 0 else None
+
+    @classmethod
+    def _parse_brti_payload(cls, response, now: Optional[float] = None) -> Optional[Tuple[float, float]]:
+        """Parse the documented CF Benchmarks payload and retain its source timestamp."""
+        if not isinstance(response, dict):
+            return None
+        payload = response.get("payload")
+        if payload is None and isinstance(response.get("data"), dict):
+            payload = response["data"].get("payload")
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            return None
+        current = time.time() if now is None else float(now)
+        candidates = []
+        for item in payload:
+            if not isinstance(item, dict) or item.get("repeatOfPreviousValue") is True:
+                continue
+            value = cls._parse_brti_value(item.get("value"))
+            try:
+                source_ts = float(item.get("time")) / 1000.0
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if value is None or not math.isfinite(source_ts) or source_ts <= 0:
+                continue
+            age = current - source_ts
+            if age < -0.5 or age > settings.stale_feed_threshold_sec:
+                continue
+            candidates.append((source_ts, value))
+        if not candidates:
+            return None
+        source_ts, value = max(candidates, key=lambda item: item[0])
+        return value, source_ts
 
     async def _brti_poll_loop(self) -> None:
         endpoint = "/trade-api/v2/cfbenchmarks/values"
@@ -356,16 +389,19 @@ class MarketDataHub:
                     headers = {"KALSHI-ACCESS-KEY": settings.kalshi_key_id or "", "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint), "KALSHI-ACCESS-TIMESTAMP": ts_ms}
                     async with session.get(url, headers=headers, timeout=5) as resp:
                         if resp.status == 200:
-                            val = (await resp.json()).get("data", {}).get("payload", {}).get("value")
-                            if val is not None:
-                                parsed_value = self._parse_brti_value(val)
-                                if parsed_value is not None:
-                                    self.official_brti_price, self.last_brti_ts, self.brti_status, self.brti_detail = parsed_value, time.time(), "LIVE", "Official CF Benchmarks BRTI"
-                                else:
-                                    self.brti_status, self.brti_detail = "INVALID_DATA", "BRTI payload contained a non-finite or non-positive value"
+                            parsed = self._parse_brti_payload(await resp.json())
+                            if parsed is not None:
+                                self.official_brti_price, self.last_brti_ts = parsed
+                                self.brti_status, self.brti_detail = "LIVE", "Official CF Benchmarks BRTI (source timestamp validated)"
+                            else:
+                                self.brti_status, self.brti_detail = "INVALID_DATA", "No valid, fresh BRTI value with a source timestamp was returned"
                         elif resp.status in (401, 403):
                             self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
                             break
+                        else:
+                            self.brti_status, self.brti_detail = "UNAVAILABLE", f"Kalshi BRTI HTTP {resp.status}"
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     self.brti_status, self.brti_detail = "UNAVAILABLE", f"BRTI check error: {e}"
                 await asyncio.sleep(2.0)
