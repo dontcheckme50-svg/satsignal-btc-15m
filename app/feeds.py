@@ -419,7 +419,15 @@ class MarketDataHub:
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE"))
         )
         brti_age = safe_age_seconds(self.last_brti_ts, now)
-        brti_display_status = "FUTURE_TIMESTAMP" if self.last_brti_ts and brti_age is None else ("STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status)
+        if self.last_brti_ts and brti_age is None:
+            brti_display_status = "FUTURE_TIMESTAMP"
+        elif brti_age is None:
+            # A LIVE label without a source timestamp is not evidence of a live feed.
+            brti_display_status = "UNAVAILABLE" if self.brti_status == "LIVE" else self.brti_status
+        elif brti_age > settings.stale_feed_threshold_sec:
+            brti_display_status = "STALE"
+        else:
+            brti_display_status = self.brti_status
         multi = self.get_multi_exchange_snapshot()
         venue_statuses = []
         for venue in multi.get("venues", []):
