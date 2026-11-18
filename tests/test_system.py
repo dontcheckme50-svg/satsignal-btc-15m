@@ -1499,3 +1499,46 @@ def test_order_book_source_mismatch_degrades_and_recovers_prediction(tmp_path):
     statuses = {item.name: item.status for item in hub.get_feed_statuses()}
     assert statuses["Order Book Depth"] == "LIVE"
     assert recovered.weakness.feed_degraded is False
+
+
+@pytest.mark.asyncio
+async def test_supervised_feed_worker_restarts_after_unexpected_crash(monkeypatch):
+    hub = MarketDataHub()
+    hub._running = True
+    attempts = []
+
+    async def flaky_worker():
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            raise RuntimeError("simulated websocket task crash")
+        hub._running = False
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+
+    await hub._run_supervised_feed("Spot Feed Worker", flaky_worker, retry_delay=0.01)
+
+    runtime = hub._feed_runtime["Spot Feed Worker"]
+    assert attempts == [1, 2]
+    assert runtime["restart_count"] == 1
+    assert runtime["last_error"] == "RuntimeError: simulated websocket task crash"
+    assert runtime["state"] == "STOPPED"
+
+
+def test_feed_statuses_expose_supervisor_restart_diagnostics():
+    hub = MarketDataHub()
+    runtime = hub._feed_runtime["Kalshi Feed Worker"]
+    runtime.update(
+        state="RESTARTING",
+        restart_count=2,
+        last_error="TimeoutError: simulated timeout",
+        started_ts=time.time() - 1.0,
+    )
+
+    statuses = {status.name: status for status in hub.get_feed_statuses()}
+
+    assert statuses["Kalshi Feed Worker"].status == "RESTARTING"
+    assert "restarts=2" in statuses["Kalshi Feed Worker"].detail
+    assert "simulated timeout" in statuses["Kalshi Feed Worker"].detail
