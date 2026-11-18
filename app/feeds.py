@@ -99,7 +99,15 @@ class MarketDataHub:
     def get_multi_exchange_snapshot(self) -> dict:
         if self.active_spot_source == "BINANCE_SPOT":
             self.multi_exchange.ingest_binance(self.live_price, list(self.bids), list(self.asks), self.last_spot_ts)
-        return self.multi_exchange.get_snapshot()
+        snapshot = self.multi_exchange.get_snapshot()
+        snapshot["primary_spot_price"] = self.live_price
+        snapshot["official_brti_price"] = self.official_brti_price
+        ref_price = snapshot.get("reference_price")
+        def diff_bps(value, benchmark):
+            return round((float(value) - float(benchmark)) / float(benchmark) * 10000.0, 4) if value is not None and benchmark is not None and float(benchmark) > 0 else None
+        snapshot["reference_vs_primary_bps"] = diff_bps(ref_price, self.live_price)
+        snapshot["reference_vs_brti_bps"] = diff_bps(ref_price, self.official_brti_price)
+        return snapshot
 
     async def fetch_verified_kalshi_settlement(self, ticker: str) -> Optional[Tuple[str, Optional[float]]]:
         if not ticker.startswith("KXBTC15M"):
