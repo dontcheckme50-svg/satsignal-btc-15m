@@ -195,6 +195,20 @@ class MarketDataHub:
                 elif "depth20" in stream:
                     self.ingest_book(now, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])])
 
+    @staticmethod
+    def _coinbase_ticker_book(msg: dict):
+        required = ("best_bid", "best_ask", "best_bid_size", "best_ask_size")
+        if not all(key in msg for key in required):
+            return None
+        try:
+            bid, ask = float(msg["best_bid"]), float(msg["best_ask"])
+            bid_qty, ask_qty = float(msg["best_bid_size"]), float(msg["best_ask_size"])
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) and v > 0 for v in (bid, ask, bid_qty, ask_qty)) or bid >= ask:
+            return None
+        return ([(bid, bid_qty)], [(ask, ask_qty)])
+
     async def _run_coinbase_ws(self) -> None:
         sub = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["matches", "ticker"]}
         async with websockets.connect(settings.coinbase_ws_url, ping_interval=20, open_timeout=8) as ws:
@@ -204,17 +218,10 @@ class MarketDataHub:
                 msg, now = json.loads(raw), time.time()
                 if msg.get("type") == "match":
                     self.ingest_trade(now, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
-                elif (
-                    msg.get("type") == "ticker"
-                    and all(k in msg for k in ("best_bid", "best_ask", "best_bid_size", "best_ask_size"))
-                ):
-                    # Never invent equal-size liquidity when the fallback ticker
-                    # omits quantities; fabricated depth would distort imbalance.
-                    self.ingest_book(
-                        now,
-                        [(float(msg["best_bid"]), float(msg["best_bid_size"]))],
-                        [(float(msg["best_ask"]), float(msg["best_ask_size"]))],
-                    )
+                elif msg.get("type") == "ticker":
+                    parsed_book = self._coinbase_ticker_book(msg)
+                    if parsed_book is not None:
+                        self.ingest_book(now, parsed_book[0], parsed_book[1])
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
