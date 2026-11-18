@@ -971,6 +971,7 @@ def test_stale_order_book_is_excluded_and_degrades_prediction(tmp_path):
     hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
     hub.bids = [(90009.0, 100.0)]
     hub.asks = [(90011.0, 1.0)]
+    hub.last_book_source = "BINANCE_SPOT"
     hub.last_book_ts = now - 30.0
     orchestrator = PredictorOrchestrator(hub, PredictionLedger(str(tmp_path / "stale-book.db")))
 
