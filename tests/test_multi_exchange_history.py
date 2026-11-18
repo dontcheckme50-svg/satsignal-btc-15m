@@ -18,6 +18,8 @@ def test_multi_exchange_reference_history_persists_and_calculates_basis(tmp_path
         "consolidated_bid_depth_usd_within_25bps": 1000.0,
         "consolidated_ask_depth_usd_within_25bps": 800.0,
         "consolidated_imbalance": 0.1111,
+        "primary_spot_age_seconds": 0.3,
+        "official_brti_age_seconds": 0.4,
     }
     ledger.record_multi_exchange_reference(
         epoch_ts=1000.0,
