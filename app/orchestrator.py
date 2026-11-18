@@ -1,4 +1,4 @@
-import asyncio, math, time
+import asyncio, math, time, logging
 from typing import Callable, List, Optional
 from scipy.stats import norm
 from app.config import settings
@@ -7,6 +7,8 @@ from app.engines import EarlyPredictionEngine, EvidenceEngine, FinalDecisionEngi
 from app.execution import ExecutionManager
 from app.feeds import MarketDataHub, iso_now
 from app.models import ContractInfo, DashboardSnapshot, EngineStatusSummary, PredictionRecord, Signal
+
+logger = logging.getLogger(__name__)
 
 class PredictorOrchestrator:
     def __init__(self, hub: MarketDataHub, ledger: PredictionLedger):
@@ -24,6 +26,15 @@ class PredictorOrchestrator:
         self.latest_baseline_z_prob: float = 0.5
         self._listeners: List[Callable[[DashboardSnapshot], None]] = []
         self._running = False
+        # Runtime health telemetry: failures are isolated and the loop remains alive.
+        self.last_cycle_started_ts: Optional[float] = None
+        self.last_cycle_success_ts: Optional[float] = None
+        self.last_cycle_duration_sec: Optional[float] = None
+        self.last_cycle_error: Optional[str] = None
+        self.consecutive_cycle_errors: int = 0
+        self.total_cycle_errors: int = 0
+        self.last_execution_error: Optional[str] = None
+        self.last_settlement_error: Optional[str] = None
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -94,24 +105,74 @@ class PredictorOrchestrator:
         self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
         return self.latest_snapshot
 
+    def get_runtime_health(self) -> dict:
+        now = time.time()
+        cycle_age = None if self.last_cycle_success_ts is None else round(now - self.last_cycle_success_ts, 2)
+        return {
+            "running": self._running,
+            "last_cycle_started_ts": self.last_cycle_started_ts,
+            "last_cycle_success_ts": self.last_cycle_success_ts,
+            "last_cycle_age_seconds": cycle_age,
+            "last_cycle_duration_seconds": self.last_cycle_duration_sec,
+            "last_cycle_error": self.last_cycle_error,
+            "consecutive_cycle_errors": self.consecutive_cycle_errors,
+            "total_cycle_errors": self.total_cycle_errors,
+            "last_execution_error": self.last_execution_error,
+            "last_settlement_error": self.last_settlement_error,
+            "health": "HEALTHY" if self.consecutive_cycle_errors == 0 and (cycle_age is None or cycle_age <= 5.0) else "DEGRADED",
+        }
+
     async def run(self) -> None:
         self._running = True
         reconcile_counter = 0
         while self._running:
-            ts = time.time()
-            snap = self.evaluate_once(now=ts)
+            cycle_started = time.time()
+            self.last_cycle_started_ts = cycle_started
+            snap = None
+            try:
+                # The prediction cycle is isolated: one exception must not terminate
+                # the long-lived background worker.
+                snap = self.evaluate_once(now=cycle_started)
+                self.last_cycle_success_ts = time.time()
+                self.last_cycle_duration_sec = round(self.last_cycle_success_ts - cycle_started, 4)
+                self.last_cycle_error = None
+                self.consecutive_cycle_errors = 0
+            except Exception as exc:
+                self.last_cycle_error = f"{type(exc).__name__}: {exc}"
+                self.consecutive_cycle_errors += 1
+                self.total_cycle_errors += 1
+                self.last_cycle_duration_sec = round(time.time() - cycle_started, 4)
+                logger.exception("SATSignal prediction cycle failed; worker will continue")
             if snap is not None:
-                await self.executor.evaluate_and_execute(ts, snap.contract, snap.final, baseline_z_prob=self.latest_baseline_z_prob)
+                try:
+                    await self.executor.evaluate_and_execute(
+                        cycle_started, snap.contract, snap.final,
+                        baseline_z_prob=self.latest_baseline_z_prob,
+                    )
+                    self.last_execution_error = None
+                except Exception as exc:
+                    self.last_execution_error = f"{type(exc).__name__}: {exc}"
+                    logger.exception("SATSignal execution evaluation failed; prediction worker continues")
                 reconcile_counter += 1
                 if reconcile_counter >= 10:
                     reconcile_counter = 0
-                    await self.reconcile_unsettled_contracts(snap.contract.ticker, snap.evidence.live_price)
-                snap.scoreboard = self.ledger.get_scoreboard()
-                snap.recent_predictions = self.ledger.get_recent_predictions(limit=20)
-                snap.recent_trades = self.ledger.get_recent_trades(limit=15)
+                    try:
+                        await self.reconcile_unsettled_contracts(snap.contract.ticker, snap.evidence.live_price)
+                        self.last_settlement_error = None
+                    except Exception as exc:
+                        self.last_settlement_error = f"{type(exc).__name__}: {exc}"
+                        logger.exception("Settlement reconciliation failed; prediction worker continues")
+                try:
+                    snap.scoreboard = self.ledger.get_scoreboard()
+                    snap.recent_predictions = self.ledger.get_recent_predictions(limit=20)
+                    snap.recent_trades = self.ledger.get_recent_trades(limit=15)
+                except Exception:
+                    logger.exception("Could not refresh scoreboard/history for snapshot")
                 for cb in list(self._listeners):
-                    try: cb(snap)
-                    except Exception: pass
+                    try:
+                        cb(snap)
+                    except Exception:
+                        logger.exception("Snapshot listener failed; other listeners will still be notified")
             await asyncio.sleep(1.0)
 
     def stop(self) -> None:
