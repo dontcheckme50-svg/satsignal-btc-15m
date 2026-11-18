@@ -13,4 +13,8 @@ def test_multi_exchange_shadow_endpoint():
     assert "reference_vs_brti_bps" in payload
     assert "reference_vs_strike_bps" in payload
     assert payload["venue_count_required"] == 2
+    assert "trade_flow" in payload
+    assert "15" in payload["trade_flow"]["windows"]
+    assert "60" in payload["trade_flow"]["windows"]
+    assert "180" in payload["trade_flow"]["windows"]
     assert "not CF Benchmarks BRTI" in payload["method"]
