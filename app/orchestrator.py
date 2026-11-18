@@ -21,6 +21,11 @@ class PredictorOrchestrator:
         self.early_engine = EarlyPredictionEngine()
         self.final_engine = FinalDecisionEngine()
         self.active_contract: Optional[ContractInfo] = None
+        # A directional lock requires two consecutive one-second decisions
+        # for the same official contract and direction.
+        self._directional_lock_candidate_ticker: Optional[str] = None
+        self._directional_lock_candidate: Signal = Signal.WAIT
+        self._directional_lock_candidate_count: int = 0
         self.last_logged_ts: float = 0.0
         self.last_multi_exchange_logged_ts: float = 0.0
         self.latest_snapshot: Optional[DashboardSnapshot] = None
@@ -37,6 +42,11 @@ class PredictorOrchestrator:
         self.last_execution_error: Optional[str] = None
         self.last_settlement_error: Optional[str] = None
         self._settlement_task: Optional[asyncio.Task] = None
+
+    def _reset_directional_lock_candidate(self) -> None:
+        self._directional_lock_candidate_ticker = None
+        self._directional_lock_candidate = Signal.WAIT
+        self._directional_lock_candidate_count = 0
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -101,6 +111,7 @@ class PredictorOrchestrator:
             # Do not settle a synthetic contract using a price from the next
             # contract window. Synthetic contracts lack an official outcome.
             self.last_logged_ts = 0.0
+            self._reset_directional_lock_candidate()
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
         book_age = safe_age_seconds(self.hub.last_book_ts, ts)
@@ -153,27 +164,60 @@ class PredictorOrchestrator:
             )
             self.last_logged_ts = ts
 
-        # A contract gets one immutable official score record. Directional
-        # decisions lock as soon as the existing Final Decision Engine is
-        # actionable. If no direction is established, lock WAIT at the
-        # final-entry lockout boundary so the contract still has one outcome.
-        lock_due = final.signal != Signal.WAIT or new_contract.seconds_remaining <= settings.final_lockout_seconds
-        if record_to_db and new_contract.is_official_kalshi and lock_due and not self.ledger.has_official_prediction_lock(new_contract.ticker):
-            self.ledger.record_prediction(PredictionRecord(
-                contract_ticker=new_contract.ticker,
-                timestamp_iso=iso_now(ts),
-                epoch_ts=ts,
-                strike_price=new_contract.strike_price,
-                btc_price_at_pred=live_price,
-                seconds_remaining=round(new_contract.seconds_remaining, 1),
-                main_signal=ev.signal,
-                early_signal=early.signal,
-                final_signal=final.signal,
-                confidence=final.confidence,
-                up_prob=final.up_probability,
-                down_prob=final.down_probability,
-                regime=regime.regime,
-            ))
+        # Official directional locks require two consecutive evaluations
+        # agreeing on the same direction. WAIT, a reversal, or rollover resets
+        # confirmation. At the final-entry cutoff, an unconfirmed direction
+        # becomes a single immutable WAIT lock.
+        if record_to_db:
+            if not new_contract.is_official_kalshi or self.ledger.has_official_prediction_lock(new_contract.ticker):
+                self._reset_directional_lock_candidate()
+            elif final.signal in (Signal.UP, Signal.DOWN):
+                if (
+                    self._directional_lock_candidate_ticker == new_contract.ticker
+                    and self._directional_lock_candidate == final.signal
+                ):
+                    self._directional_lock_candidate_count += 1
+                else:
+                    self._directional_lock_candidate_ticker = new_contract.ticker
+                    self._directional_lock_candidate = final.signal
+                    self._directional_lock_candidate_count = 1
+            else:
+                self._reset_directional_lock_candidate()
+
+            confirmed_direction = (
+                new_contract.is_official_kalshi
+                and self._directional_lock_candidate_ticker == new_contract.ticker
+                and self._directional_lock_candidate in (Signal.UP, Signal.DOWN)
+                and self._directional_lock_candidate_count >= 2
+                and final.signal == self._directional_lock_candidate
+            )
+            at_final_lockout = new_contract.seconds_remaining <= settings.final_lockout_seconds
+            lock_signal = (
+                final.signal if confirmed_direction
+                else Signal.WAIT if at_final_lockout
+                else None
+            )
+            if (
+                new_contract.is_official_kalshi
+                and lock_signal is not None
+                and not self.ledger.has_official_prediction_lock(new_contract.ticker)
+            ):
+                self.ledger.record_prediction(PredictionRecord(
+                    contract_ticker=new_contract.ticker,
+                    timestamp_iso=iso_now(ts),
+                    epoch_ts=ts,
+                    strike_price=new_contract.strike_price,
+                    btc_price_at_pred=live_price,
+                    seconds_remaining=round(new_contract.seconds_remaining, 1),
+                    main_signal=ev.signal,
+                    early_signal=early.signal,
+                    final_signal=lock_signal,
+                    confidence=final.confidence if lock_signal != Signal.WAIT else 0.0,
+                    up_prob=final.up_probability if lock_signal != Signal.WAIT else 0.5,
+                    down_prob=final.down_probability if lock_signal != Signal.WAIT else 0.5,
+                    regime=regime.regime,
+                ))
+                self._reset_directional_lock_candidate()
         engines_summary = EngineStatusSummary(
             engine_a_evidence={"status": "ACTIVE", "signal": ev.signal.value, "raw_score": ev.raw_score, "structure": ev.structure_bias},
             engine_b_weakness={"status": "DEGRADED_FEED" if weakness.feed_degraded else "ACTIVE", "weakness_score": weakness.weakness_score, "flags": weakness.flags},
