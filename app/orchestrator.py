@@ -21,7 +21,8 @@ class PredictorOrchestrator:
         self.early_engine = EarlyPredictionEngine()
         self.final_engine = FinalDecisionEngine()
         self.active_contract: Optional[ContractInfo] = None
-        self.last_logged_ts: float = 0.0\n        self.last_multi_exchange_logged_ts: float = 0.0
+        self.last_logged_ts: float = 0.0
+        self.last_multi_exchange_logged_ts: float = 0.0
         self.latest_snapshot: Optional[DashboardSnapshot] = None
         self.latest_baseline_z_prob: float = 0.5
         self._listeners: List[Callable[[DashboardSnapshot], None]] = []
