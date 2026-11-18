@@ -263,6 +263,49 @@ async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp
 
 
 
+def test_fresh_official_brti_contributes_independent_strike_evidence():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    evidence = EvidenceEngine().analyze(
+        now, 90010.0, contract, [], [], [], [],
+        official_brti_price=90020.0, official_brti_age_sec=0.5,
+    )
+
+    assert evidence.official_brti_price == 90020.0
+    assert evidence.official_brti_age_seconds == 0.5
+    assert evidence.brti_distance_from_strike == 20.0
+    assert evidence.brti_spot_spread_bps is not None
+    assert evidence.brti_conflict is False
+
+
+def test_brti_spot_strike_conflict_is_flagged_as_weakness():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    evidence = EvidenceEngine().analyze(
+        now, 90020.0, contract, [], [], [], [],
+        official_brti_price=89980.0, official_brti_age_sec=0.5,
+    )
+    weakness = WeaknessEngine().analyze(evidence, spot_age_sec=0.0, book_age_sec=0.0)
+
+    assert evidence.brti_conflict is True
+    assert weakness.weakness_score >= 20.0
+    assert any("BRTI and spot" in flag for flag in weakness.flags)
+
+
+def test_stale_official_brti_is_excluded_without_becoming_a_spot_fallback():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    without_brti = EvidenceEngine().analyze(now, 90020.0, contract, [], [], [], [])
+    with_stale_brti = EvidenceEngine().analyze(
+        now, 90020.0, contract, [], [], [], [],
+        official_brti_price=89980.0, official_brti_age_sec=10.0,
+    )
+
+    assert with_stale_brti.official_brti_price is None
+    assert with_stale_brti.brti_distance_from_strike is None
+    assert with_stale_brti.raw_score == without_brti.raw_score
+
+
 def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     now = 1_000_000.0
     contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
