@@ -514,3 +514,15 @@ async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent
 
     assert len(calls) == 5
     assert max_active <= 3
+
+
+
+def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
+    hub = MarketDataHub()
+    epoch = 1_800_000_000.0
+
+    assert hub._parse_exchange_timestamp(epoch * 1000) == epoch
+    assert hub._parse_exchange_timestamp("2027-01-15T08:00:00Z") == pytest.approx(
+        time.mktime(time.strptime("2027-01-15T08:00:00", "%Y-%m-%dT%H:%M:%S"))
+    )
+    assert hub._parse_exchange_timestamp("bad-time", fallback=123.0) == 123.0
