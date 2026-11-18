@@ -1025,3 +1025,40 @@ def test_official_settlement_is_idempotent_and_does_not_regrade_lock(tmp_path):
     assert row.final_won is True
     assert row.settlement_source == "KALSHI_VERIFIED"
 
+def test_contract_rollover_clears_previous_directional_confirmation_candidate(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    new_contract = _contract(
+        ticker="KXBTC15M-ROLLOVER-NEW",
+        open_timestamp=now - 10.0,
+        close_timestamp=now + 800.0,
+    )
+    hub.kalshi_contract = new_contract
+    hub.last_kalshi_ts = now
+
+    orchestrator = PredictorOrchestrator(
+        hub, PredictionLedger(str(tmp_path / "rollover-candidate.db"))
+    )
+    orchestrator.active_contract = _contract(
+        ticker="KXBTC15M-ROLLOVER-OLD",
+        open_timestamp=now - 910.0,
+        close_timestamp=now - 10.0,
+    )
+    orchestrator._directional_lock_candidate_ticker = "KXBTC15M-ROLLOVER-OLD"
+    orchestrator._directional_lock_candidate = Signal.UP
+    orchestrator._directional_lock_candidate_count = 1
+    orchestrator.last_logged_ts = now - 5.0
+
+    snapshot = orchestrator.evaluate_once(now=now, record_to_db=False)
+
+    assert snapshot is not None
+    assert snapshot.contract.ticker == "KXBTC15M-ROLLOVER-NEW"
+    assert orchestrator._directional_lock_candidate_ticker is None
+    assert orchestrator._directional_lock_candidate == Signal.WAIT
+    assert orchestrator._directional_lock_candidate_count == 0
+    assert orchestrator.last_logged_ts == 0.0
+
