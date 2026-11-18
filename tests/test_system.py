@@ -269,7 +269,6 @@ def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     assert evidence.trade_delta_60s == 0.2
     assert evidence.cvd_contract == 0.2
     assert evidence.buying_pressure_pct == 75.0
-    assert evidence.volume_ratio == 1.0  # startup sample is too short for a baseline
 
 
 
@@ -346,3 +345,16 @@ def test_one_second_bars_use_previous_second_last_trade_price():
     assert hub.bars_1s[-1][0] == sec
     assert hub.bars_1s[-1][1] == 90005.0
     assert hub.bars_1s[-1][2] == pytest.approx(0.5)
+
+
+
+def test_volume_ratio_is_neutral_when_history_is_shorter_than_one_minute():
+    now = time.time()
+    contract = _contract(open_timestamp=now - 20.0, seconds_remaining=800.0)
+    trades = [
+        (now - 5.0, 90010.0, 0.3, False),
+        (now - 3.0, 90009.0, 0.1, True),
+    ]
+    evidence = EvidenceEngine().analyze(now, 90010.0, contract, trades, [], [], [])
+
+    assert evidence.volume_ratio == 1.0
