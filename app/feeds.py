@@ -32,6 +32,7 @@ class MarketDataHub:
         self.bars_1s: Deque[Tuple[int, float, float]] = deque(maxlen=3600)
         self._current_sec: int = 0
         self._current_sec_vol: float = 0.0
+        self._current_sec_last_price: Optional[float] = None
         self.bids: List[Tuple[float, float]] = []
         self.asks: List[Tuple[float, float]] = []
         self.last_book_ts: float = 0.0
@@ -86,14 +87,20 @@ class MarketDataHub:
         sec = int(ts)
         if self._current_sec == 0:
             self._current_sec = sec
-        if sec > self._current_sec:
-            self.bars_1s.append((self._current_sec, price, self._current_sec_vol))
+            self._current_sec_vol = qty
+            self._current_sec_last_price = price
+        elif sec > self._current_sec:
+            # Store the completed second's actual last trade price, not the
+            # first price from the following second.
+            self.bars_1s.append((self._current_sec, self._current_sec_last_price or price, self._current_sec_vol))
             self._current_sec = sec
             self._current_sec_vol = qty
+            self._current_sec_last_price = price
         elif sec == self._current_sec:
             self._current_sec_vol += qty
-        # Older-than-current-second events are retained in trade flow but do not
-        # mutate the already-closed one-second volume bucket.
+            self._current_sec_last_price = price
+        # Timestamp ordering is validated above, so closed seconds never receive
+        # late updates. Gaps remain gaps rather than fabricated candles.
 
     def ingest_book(self, ts: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> None:
         try:
