@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import json
+import math
 import time
 from collections import deque
 from typing import Dict, List, Optional, Tuple
@@ -23,6 +24,9 @@ class VenueBook:
         self.reconnects = 0
 
     def update_level(self, side: str, price: float, qty: float) -> None:
+        price, qty = float(price), float(qty)
+        if not math.isfinite(price) or price <= 0 or not math.isfinite(qty):
+            return
         book = self.bids if side.lower() in ("buy", "bid", "b") else self.asks
         if qty <= 0:
             book.pop(price, None)
@@ -59,8 +63,13 @@ class VenueBook:
 
     def snapshot(self, now: Optional[float] = None, max_levels: int = 20) -> dict:
         now = time.time() if now is None else now
-        bids = sorted(self.bids.items(), reverse=True)[:max_levels]
-        asks = sorted(self.asks.items())[:max_levels]
+        bids = sorted(
+            ((p, q) for p, q in self.bids.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
+            reverse=True,
+        )[:max_levels]
+        asks = sorted(
+            ((p, q) for p, q in self.asks.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
+        )[:max_levels]
         age = max(0.0, now - self.last_book_ts) if self.last_book_ts else None
         book_valid = bool(bids and asks and bids[0][0] > 0 and asks[0][0] > 0 and bids[0][1] > 0 and asks[0][1] > 0 and bids[0][0] < asks[0][0])
         if not book_valid or age is None or age > 5.0:
