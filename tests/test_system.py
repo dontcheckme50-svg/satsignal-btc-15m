@@ -1,4 +1,5 @@
 import time
+import pytest
 from pathlib import Path
 
 from app.config import settings
@@ -211,3 +212,31 @@ def test_dashboard_countdown_uses_absolute_contract_timestamps():
     assert 'contractCloseEpochMs = Number(d.contract.close_timestamp) * 1000' in DASHBOARD_HTML
     assert 'setInterval(tickTimers, 250)' in DASHBOARD_HTML
     assert 'Date.now() + serverClockOffsetMs' in DASHBOARD_HTML
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    ledger = PredictionLedger(str(tmp_path / "worker-health.db"))
+    orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
+    calls = {"evaluate": 0}
+
+    def broken_evaluate_once(now=None, record_to_db=True):
+        calls["evaluate"] += 1
+        raise RuntimeError("injected cycle failure")
+
+    async def stop_after_cycle(_seconds):
+        orchestrator.stop()
+
+    orchestrator.evaluate_once = broken_evaluate_once
+    monkeypatch.setattr("app.orchestrator.asyncio.sleep", stop_after_cycle)
+    await orchestrator.run()
+
+    health = orchestrator.get_runtime_health()
+    assert calls["evaluate"] == 1
+    assert health["running"] is False
+    assert health["total_cycle_errors"] == 1
+    assert health["consecutive_cycle_errors"] == 1
+    assert "injected cycle failure" in health["last_cycle_error"]
+    assert health["health"] == "DEGRADED"
