@@ -140,8 +140,6 @@ class MarketDataHub:
         await self.multi_exchange.stop()
 
     def get_multi_exchange_snapshot(self) -> dict:
-        if self.active_spot_source == "BINANCE_SPOT":
-            self.multi_exchange.ingest_binance(self.live_price, list(self.bids), list(self.asks), self.last_spot_ts)
         snapshot = self.multi_exchange.get_snapshot()
         now = time.time()
         primary_age = safe_age_seconds(self.last_spot_ts, now)
