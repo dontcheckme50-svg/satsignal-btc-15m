@@ -397,3 +397,14 @@ def test_kalshi_feed_future_timestamp_is_not_live():
     statuses = {item.name: item.status for item in hub.get_feed_statuses()}
 
     assert statuses["Kalshi KXBTC15M"] == "FUTURE_TIMESTAMP"
+
+
+
+def test_brti_parser_rejects_nonfinite_and_nonpositive_values():
+    hub = MarketDataHub()
+
+    assert hub._parse_brti_value("90000.25") == 90000.25
+    assert hub._parse_brti_value(float("nan")) is None
+    assert hub._parse_brti_value(float("inf")) is None
+    assert hub._parse_brti_value("-1") is None
+    assert hub._parse_brti_value("invalid") is None
