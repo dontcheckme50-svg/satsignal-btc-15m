@@ -213,3 +213,18 @@ def test_two_venues_with_excessive_pairwise_disagreement_do_not_form_live_compos
     assert snapshot["reference_price"] is None
     assert snapshot["included_venues"] == []
     assert set(snapshot["outlier_venues"]) == {"COINBASE", "KRAKEN"}
+
+
+def test_non_finite_order_book_levels_are_ignored():
+    venue = VenueBook("TEST", "USD")
+    venue.update_level("bid", float("nan"), 1.0)
+    venue.update_level("bid", 100.0, float("inf"))
+    venue.update_level("bid", 100.0, 2.0)
+    venue.update_level("ask", 101.0, 2.0)
+    venue.last_book_ts = time.time()
+
+    snapshot = venue.snapshot()
+
+    assert snapshot["status"] == "LIVE"
+    assert snapshot["bid"] == 100.0
+    assert snapshot["bid_depth"] == 200.0
