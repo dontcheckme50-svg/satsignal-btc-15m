@@ -1,4 +1,4 @@
-import sqlite3, json
+import sqlite3, json, math
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -383,7 +383,24 @@ class PredictionLedger:
             row = conn.execute("SELECT COALESCE(SUM(contracts), 0) AS c FROM trades WHERE contract_ticker = ? AND status = 'OPEN'", (contract_ticker,)).fetchone()
             return int(row["c"])
 
-    def settle_contract(self, contract_ticker: str, settlement_price: float, official_result: Optional[str] = None, settlement_source: str = "SPOT_CLOSE_PROXY") -> int:
+    def settle_contract(self, contract_ticker: str, settlement_price: Optional[float], official_result: Optional[str] = None, settlement_source: str = "SPOT_CLOSE_PROXY") -> int:
+        # A verified outcome may be authoritative even when Kalshi omits
+        # expiration_value. Never substitute the current BTC price from a later
+        # contract; retain NULL for an unavailable settlement price.
+        if official_result not in ("UP", "DOWN"):
+            try:
+                settlement_price = float(settlement_price)
+            except (TypeError, ValueError, OverflowError):
+                return 0
+            if not math.isfinite(settlement_price) or settlement_price <= 0:
+                return 0
+        elif settlement_price is not None:
+            try:
+                settlement_price = float(settlement_price)
+            except (TypeError, ValueError, OverflowError):
+                settlement_price = None
+            if settlement_price is not None and (not math.isfinite(settlement_price) or settlement_price <= 0):
+                settlement_price = None
         with self._connection() as conn:
             rows = conn.execute("SELECT * FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 AND settled = 0", (contract_ticker,)).fetchall()
             updated = 0
