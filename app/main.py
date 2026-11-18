@@ -97,6 +97,10 @@ async def get_multi_exchange_history(limit: int = Query(default=200, ge=1, le=10
 async def get_history(limit: int = Query(default=50, ge=1, le=500)):
     return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
 
+@app.get("/api/prediction-observations")
+async def get_prediction_observations(limit: int = Query(default=100, ge=1, le=1000), contract_ticker: Optional[str] = None):
+    return {"observations": ledger.get_recent_prediction_observations(limit=limit, contract_ticker=contract_ticker)}
+
 @app.get("/api/scoreboard")
 async def get_scoreboard():
     return ledger.get_scoreboard().model_dump()
