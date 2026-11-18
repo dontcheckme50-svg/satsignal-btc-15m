@@ -66,8 +66,21 @@ class MarketDataHub:
         return base64.b64encode(sig).decode("utf-8")
 
     def ingest_trade(self, ts: float, price: float, qty: float, is_buyer_maker: bool, source: str) -> None:
+        # Reject malformed, non-finite, future-dated, and materially out-of-order
+        # events before they can alter price, volume, bars, or prediction evidence.
+        try:
+            ts, price, qty = float(ts), float(price), float(qty)
+        except (TypeError, ValueError):
+            return
+        now = time.time()
+        if not all(math.isfinite(v) for v in (ts, price, qty)) or ts <= 0 or price <= 0 or qty <= 0:
+            return
+        if ts > now + 0.5 or ts < self.last_spot_ts - 1.0:
+            return
+        if not isinstance(is_buyer_maker, bool) or not isinstance(source, str) or not source.strip():
+            return
         self.live_price = price
-        self.last_spot_ts = ts
+        self.last_spot_ts = max(ts, self.last_spot_ts)
         self.active_spot_source = source
         self.trades.append((ts, price, qty, is_buyer_maker))
         sec = int(ts)
@@ -77,13 +90,26 @@ class MarketDataHub:
             self.bars_1s.append((self._current_sec, price, self._current_sec_vol))
             self._current_sec = sec
             self._current_sec_vol = qty
-        else:
+        elif sec == self._current_sec:
             self._current_sec_vol += qty
+        # Older-than-current-second events are retained in trade flow but do not
+        # mutate the already-closed one-second volume bucket.
 
     def ingest_book(self, ts: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> None:
-        self.bids = sorted(bids, key=lambda x: x[0], reverse=True)[:20]
-        self.asks = sorted(asks, key=lambda x: x[0])[:20]
-        self.last_book_ts = ts
+        try:
+            ts = float(ts)
+            clean_bids = [(float(p), float(q)) for p, q in bids if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
+            clean_asks = [(float(p), float(q)) for p, q in asks if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(ts) or ts <= 0 or ts > time.time() + 0.5 or ts < self.last_book_ts - 1.0:
+            return
+        clean_bids = sorted(clean_bids, key=lambda x: x[0], reverse=True)[:20]
+        clean_asks = sorted(clean_asks, key=lambda x: x[0])[:20]
+        if not clean_bids or not clean_asks or clean_bids[0][0] >= clean_asks[0][0]:
+            return
+        self.bids, self.asks = clean_bids, clean_asks
+        self.last_book_ts = max(ts, self.last_book_ts)
 
     async def start(self) -> None:
         if self._running:
