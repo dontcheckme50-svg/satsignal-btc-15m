@@ -113,6 +113,8 @@ class PredictorOrchestrator:
             # Do not settle a synthetic contract using a price from the next
             # contract window. Synthetic contracts lack an official outcome.
             self.last_logged_ts = 0.0
+            # Start a fresh shadow-history cadence for each official contract.
+            self.last_multi_exchange_logged_ts = 0.0
             self._reset_directional_lock_candidate()
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
