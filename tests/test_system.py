@@ -1255,3 +1255,44 @@ def test_brti_cohort_api_returns_settled_performance(monkeypatch):
     response = TestClient(main_module.app).get("/api/brti-cohorts")
     assert response.status_code == 200
     assert response.json() == expected_report
+
+
+@pytest.mark.asyncio
+async def test_official_settlement_without_expiration_value_never_uses_current_spot(tmp_path, monkeypatch):
+    from app.orchestrator import PredictorOrchestrator
+
+    ledger = PredictionLedger(str(tmp_path / "missing-expiration-value.db"))
+    ledger.record_prediction(_prediction_record("KXBTC15M-NO-EXPIRATION-VALUE", final=Signal.UP))
+    hub = MarketDataHub()
+    async def verified_without_price(_ticker):
+        return "UP", None
+
+    monkeypatch.setattr(hub, "fetch_verified_kalshi_settlement", verified_without_price)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    await orchestrator.reconcile_unsettled_contracts(
+        "KXBTC15M-CURRENT", fallback_price=99999.0
+    )
+
+    row = ledger.get_recent_predictions(limit=1)[0]
+    assert row.settled is True
+    assert row.actual_outcome == "UP"
+    assert row.final_won is True
+    assert row.settlement_price is None
+    assert row.settlement_source == "KALSHI_VERIFIED"
+
+
+def test_settlement_without_official_result_requires_a_valid_contract_price(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "reject-unverified-settlement.db"))
+    ledger.record_prediction(_prediction_record("KXBTC15M-UNVERIFIED-SETTLEMENT"))
+
+    assert ledger.settle_contract(
+        "KXBTC15M-UNVERIFIED-SETTLEMENT",
+        settlement_price=None,
+        official_result=None,
+        settlement_source="SPOT_CLOSE_PROXY",
+    ) == 0
+
+    row = ledger.get_recent_predictions(limit=1)[0]
+    assert row.settled is False
+    assert row.actual_outcome is None
