@@ -54,7 +54,10 @@ class PredictionLedger:
                     final_won INTEGER,
                     main_won INTEGER,
                     early_won INTEGER,
-                    is_official_lock INTEGER NOT NULL DEFAULT 0
+                    is_official_lock INTEGER NOT NULL DEFAULT 0,
+                    brti_cohort TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    brti_side_at_lock TEXT,
+                    spot_side_at_lock TEXT
                 );
                 CREATE TABLE IF NOT EXISTS prediction_observations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +114,12 @@ class PredictionLedger:
                 CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
             """)
             prediction_columns = {row["name"] for row in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+            if "brti_cohort" not in prediction_columns:
+                conn.execute("ALTER TABLE predictions ADD COLUMN brti_cohort TEXT NOT NULL DEFAULT 'UNKNOWN'")
+            if "brti_side_at_lock" not in prediction_columns:
+                conn.execute("ALTER TABLE predictions ADD COLUMN brti_side_at_lock TEXT")
+            if "spot_side_at_lock" not in prediction_columns:
+                conn.execute("ALTER TABLE predictions ADD COLUMN spot_side_at_lock TEXT")
             if "is_official_lock" not in prediction_columns:
                 conn.execute("ALTER TABLE predictions ADD COLUMN is_official_lock INTEGER NOT NULL DEFAULT 0")
                 # Keep all historical snapshots, but designate only the latest
@@ -194,12 +203,14 @@ class PredictionLedger:
                 """INSERT OR IGNORE INTO predictions (
                     contract_ticker, timestamp_iso, epoch_ts, strike_price,
                     btc_price_at_pred, seconds_remaining, main_signal, early_signal,
-                    final_signal, confidence, up_prob, down_prob, regime, is_official_lock
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                    final_signal, confidence, up_prob, down_prob, regime, is_official_lock,
+                    brti_cohort, brti_side_at_lock, spot_side_at_lock
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
                 (rec.contract_ticker, rec.timestamp_iso, rec.epoch_ts, rec.strike_price,
                  rec.btc_price_at_pred, rec.seconds_remaining, rec.main_signal.value,
                  rec.early_signal.value, rec.final_signal.value, rec.confidence,
-                 rec.up_prob, rec.down_prob, rec.regime.value),
+                 rec.up_prob, rec.down_prob, rec.regime.value, rec.brti_cohort,
+                 rec.brti_side_at_lock, rec.spot_side_at_lock),
             )
             if cur.rowcount:
                 return int(cur.lastrowid)
@@ -208,6 +219,27 @@ class PredictionLedger:
                 (rec.contract_ticker,),
             ).fetchone()
             return int(existing["id"]) if existing else 0
+
+
+    def get_brti_cohort_performance(self) -> List[dict]:
+        """Return settled directional lock accuracy grouped by BRTI/spot alignment at lock time."""
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT brti_cohort, COUNT(*) AS settled,
+                   SUM(CASE WHEN final_won = 1 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN final_won = 0 THEN 1 ELSE 0 END) AS losses
+                   FROM predictions
+                   WHERE is_official_lock = 1 AND settled = 1
+                     AND final_signal IN ('UP', 'DOWN') AND final_won IS NOT NULL
+                   GROUP BY brti_cohort ORDER BY brti_cohort"""
+            ).fetchall()
+        return [
+            {"cohort": r["brti_cohort"], "settled": int(r["settled"]),
+             "wins": int(r["wins"] or 0), "losses": int(r["losses"] or 0),
+             "accuracy_pct": round((int(r["wins"] or 0) / int(r["settled"])) * 100.0, 2)
+                 if int(r["settled"]) else None}
+            for r in rows
+        ]
 
     def has_official_prediction_lock(self, contract_ticker: str) -> bool:
         with self._connection() as conn:
@@ -330,7 +362,9 @@ class PredictionLedger:
                     seconds_remaining=r["seconds_remaining"], main_signal=Signal(r["main_signal"]),
                     early_signal=Signal(r["early_signal"]), final_signal=Signal(r["final_signal"]),
                     confidence=r["confidence"], up_prob=r["up_prob"], down_prob=r["down_prob"],
-                    regime=MarketRegime(r["regime"]), settled=bool(r["settled"]), settlement_source=r["settlement_source"],
+                    regime=MarketRegime(r["regime"]), brti_cohort=r["brti_cohort"],
+                    brti_side_at_lock=r["brti_side_at_lock"], spot_side_at_lock=r["spot_side_at_lock"],
+                    settled=bool(r["settled"]), settlement_source=r["settlement_source"],
                     settlement_price=r["settlement_price"], actual_outcome=r["actual_outcome"],
                     final_won=None if r["final_won"] is None else bool(r["final_won"]),
                     main_won=None if r["main_won"] is None else bool(r["main_won"]),
