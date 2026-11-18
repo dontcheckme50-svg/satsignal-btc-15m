@@ -204,8 +204,17 @@ class MarketDataHub:
                 msg, now = json.loads(raw), time.time()
                 if msg.get("type") == "match":
                     self.ingest_trade(now, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
-                elif msg.get("type") == "ticker" and "best_bid" in msg and "best_ask" in msg:
-                    self.ingest_book(now, [(float(msg["best_bid"]), float(msg.get("best_bid_size", 1.0)))], [(float(msg["best_ask"]), float(msg.get("best_ask_size", 1.0)))])
+                elif (
+                    msg.get("type") == "ticker"
+                    and all(k in msg for k in ("best_bid", "best_ask", "best_bid_size", "best_ask_size"))
+                ):
+                    # Never invent equal-size liquidity when the fallback ticker
+                    # omits quantities; fabricated depth would distort imbalance.
+                    self.ingest_book(
+                        now,
+                        [(float(msg["best_bid"]), float(msg["best_bid_size"]))],
+                        [(float(msg["best_ask"]), float(msg["best_ask_size"]))],
+                    )
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
@@ -309,8 +318,9 @@ class MarketDataHub:
         book_status = "FUTURE_TIMESTAMP" if self.last_book_ts and book_age is None else ("LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE"))
         kalshi_age = safe_age_seconds(self.last_kalshi_ts, now)
         kalshi_status = (
-            "LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
-            else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
+            "FUTURE_TIMESTAMP" if self.last_kalshi_ts and kalshi_age is None
+            else ("LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
+            else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE"))
         )
         brti_age = safe_age_seconds(self.last_brti_ts, now)
         brti_display_status = "FUTURE_TIMESTAMP" if self.last_brti_ts and brti_age is None else ("STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status)
