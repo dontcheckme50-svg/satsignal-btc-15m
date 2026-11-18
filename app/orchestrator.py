@@ -129,7 +129,9 @@ class PredictorOrchestrator:
     def get_runtime_health(self) -> dict:
         now = time.time()
         cycle_age = None if self.last_cycle_success_ts is None else round(now - self.last_cycle_success_ts, 2)
-        if self.last_cycle_success_ts is None:
+        if not self._running:
+            health = "STOPPED"
+        elif self.last_cycle_success_ts is None:
             health = "DEGRADED" if self.consecutive_cycle_errors else "WARMING_UP"
         elif self.consecutive_cycle_errors or cycle_age is None or cycle_age > 5.0:
             health = "DEGRADED"
