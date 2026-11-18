@@ -281,7 +281,7 @@ class MarketDataHub:
             "LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
         )
-        brti_age = round(now - self.last_brti_ts, 2) if self.last_brti_ts else None
+        brti_age = safe_age_seconds(self.last_brti_ts, now)
         brti_display_status = "FUTURE_TIMESTAMP" if self.last_brti_ts and brti_age is None else ("STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status)
         multi = self.get_multi_exchange_snapshot()
         venue_statuses = []
