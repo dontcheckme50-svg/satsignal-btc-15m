@@ -338,8 +338,7 @@ async def test_synthetic_contracts_are_not_settled_with_later_fallback_price(tmp
 
 def test_one_second_bars_use_previous_second_last_trade_price():
     hub = MarketDataHub()
-    now = time.time()
-    sec = int(now)
+    sec = int(time.time()) - 3
     hub.ingest_trade(sec + 0.1, 90000.0, 0.2, False, "TEST")
     hub.ingest_trade(sec + 0.4, 90005.0, 0.3, False, "TEST")
     hub.ingest_trade(sec + 1.1, 90010.0, 0.1, False, "TEST")
