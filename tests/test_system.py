@@ -1578,7 +1578,7 @@ def test_all_prediction_engines_disclose_stale_cached_spot_and_recover(tmp_path)
 
     # Once both live spot and its matching book recover, engine health recovers
     # on the next evaluation without restarting the orchestrator or engines.
-    recovered_at = now + 1.0
+    recovered_at = time.time()
     hub.ingest_trade(recovered_at, 90012.0, 0.15, False, "BINANCE_SPOT")
     hub.ingest_book(
         recovered_at, [(90011.0, 2.0)], [(90013.0, 2.0)],
