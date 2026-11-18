@@ -268,8 +268,12 @@ class PredictionLedger:
         paired_count = len(paired_rows)
         brti_hits = sum(r["brti_side_at_lock"] == r["actual_outcome"] for r in paired_rows)
         spot_hits = sum(r["spot_side_at_lock"] == r["actual_outcome"] for r in paired_rows)
+        # Conservative reporting gate only: never changes forecasts or trading weights.
+        min_descriptive_sample = 30
         paired_comparison = {
             "sample_size": paired_count,
+            "sample_status": "SUFFICIENT_FOR_DESCRIPTIVE_REVIEW" if paired_count >= min_descriptive_sample else "LIMITED_SAMPLE",
+            "minimum_descriptive_sample": min_descriptive_sample,
             "brti": {
                 "correct": brti_hits,
                 "incorrect": paired_count - brti_hits,
@@ -287,6 +291,11 @@ class PredictionLedger:
             "note": "Paired settled locks only; descriptive comparison, not proof of predictive lift.",
         }
         for cohort in cohorts:
+            cohort["sample_status"] = (
+                "SUFFICIENT_FOR_DESCRIPTIVE_REVIEW"
+                if cohort["settled"] >= min_descriptive_sample else "LIMITED_SAMPLE"
+            )
+            cohort["minimum_descriptive_sample"] = min_descriptive_sample
             cohort["vs_baseline_pct_points"] = (
                 round(cohort["accuracy_pct"] - baseline_accuracy, 2)
                 if baseline_accuracy is not None else None
@@ -299,7 +308,7 @@ class PredictionLedger:
             },
             "cohorts": cohorts,
             "brti_vs_spot": paired_comparison,
-            "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
+            "interpretation": "Descriptive only; 30 observations is a reporting threshold, not statistical significance or proof of predictive lift.",
         }
 
     def has_official_prediction_lock(self, contract_ticker: str) -> bool:
