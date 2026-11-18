@@ -139,7 +139,19 @@ class PredictorOrchestrator:
             except Exception:
                 logger.exception("Failed to persist multi-exchange shadow observation")
         observed_bars = [bar for bar in self.hub.bars_1s if bar[0] <= ts]
-        ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), observed_bars, evidence_bids, evidence_asks)
+        brti_age = safe_age_seconds(self.hub.last_brti_ts, ts)
+        brti_is_fresh = (
+            self.hub.brti_status == "LIVE"
+            and brti_age is not None
+            and brti_age <= settings.stale_feed_threshold_sec
+        )
+        official_brti_price = self.hub.official_brti_price if brti_is_fresh else None
+        ev = self.evidence_engine.analyze(
+            ts, live_price, new_contract, list(self.hub.trades),
+            observed_bars, evidence_bids, evidence_asks,
+            official_brti_price=official_brti_price,
+            official_brti_age_sec=brti_age if brti_is_fresh else None,
+        )
         weakness = self.weakness_engine.analyze(ev, spot_age, book_age)
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
