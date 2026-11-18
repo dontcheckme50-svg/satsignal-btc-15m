@@ -148,6 +148,7 @@ def test_aggregate_cross_venue_flow_sums_btc_delta():
     assert snapshot["trade_flow"]["windows"]["15"]["sell_volume_btc"] == 0.2
     assert snapshot["trade_flow"]["windows"]["15"]["delta_btc"] == 0.2
     assert snapshot["trade_flow"]["windows"]["15"]["delta_ratio"] == 0.333333
+    assert snapshot["trade_flow"]["windows"]["15"]["source_venues"] == ["COINBASE", "KRAKEN"]
 
 
 
