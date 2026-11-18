@@ -450,3 +450,26 @@ def test_future_kalshi_timestamp_cannot_authorize_official_contract():
 
     assert resolved.is_official_kalshi is False
     assert resolved.ticker.startswith("SYNTH-BTC15M-")
+
+
+
+@pytest.mark.asyncio
+async def test_primary_spot_stream_clean_close_is_backed_off(monkeypatch):
+    hub = MarketDataHub()
+    hub._running = True
+    calls = {"worker": 0, "sleep": 0}
+
+    async def clean_close():
+        calls["worker"] += 1
+
+    async def stop_after_backoff(_seconds):
+        calls["sleep"] += 1
+        hub._running = False
+
+    monkeypatch.setattr(hub, "_run_binance_ws", clean_close)
+    monkeypatch.setattr(hub, "_run_coinbase_ws", clean_close)
+    monkeypatch.setattr("app.feeds.asyncio.sleep", stop_after_backoff)
+
+    await hub._spot_stream_loop()
+
+    assert calls == {"worker": 1, "sleep": 1}
