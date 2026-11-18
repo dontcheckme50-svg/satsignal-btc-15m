@@ -37,6 +37,21 @@ class VenueBook:
         else:
             book[price] = qty
 
+    def ingest_trade(self, ts: float, price: float, qty: float, side: str) -> bool:
+        try:
+            ts, price, qty = float(ts), float(price), float(qty)
+        except (TypeError, ValueError):
+            return False
+        side = str(side or "unknown").lower()
+        now = time.time()
+        if not all(math.isfinite(v) for v in (ts, price, qty)) or ts <= 0 or price <= 0 or qty <= 0 or ts > now + 0.5:
+            return False
+        if side not in ("buy", "sell", "unknown"):
+            side = "unknown"
+        self.trades.append((ts, price, qty, side))
+        self.last_trade_price, self.last_trade_ts = price, ts
+        return True
+
     def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180)) -> dict:
         now = time.time() if now is None else now
         latest_trade_age = (now - self.last_trade_ts) if self.last_trade_ts and now >= self.last_trade_ts else None
@@ -46,7 +61,7 @@ class VenueBook:
         }
         max_window = max(windows) if windows else 0
         # Exclude future-dated records as well as trades outside the rolling window.
-        recent_max = [trade for trade in self.trades if now - max_window <= trade[0] <= now]
+        recent_max = [trade for trade in self.trades if len(trade) == 4 and all(math.isfinite(float(v)) for v in trade[:3]) and trade[0] <= now and now - max_window <= trade[0] and trade[1] > 0 and trade[2] > 0]
         for window in windows:
             recent = [trade for trade in recent_max if now - window <= trade[0] <= now]
             buy_volume = sum(qty for _, _, qty, side in recent if side == "buy")
@@ -198,8 +213,7 @@ class MultiExchangeReference:
                             price, qty = float(msg["p"]), float(msg["q"])
                             if price > 0 and qty > 0:
                                 side = self._binance_aggressor_side(msg.get("m"))
-                                self.binance.last_trade_price, self.binance.last_trade_ts = price, now
-                                self.binance.trades.append((now, price, qty, side))
+                                self.binance.ingest_trade(now, price, qty, side)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -239,11 +253,9 @@ class MultiExchangeReference:
                             self.coinbase.last_book_ts = now
                         elif typ == "match" and msg.get("product_id") == "BTC-USD":
                             p, q = float(msg["price"]), float(msg["size"])
-                            self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
-                            # Coinbase Exchange side is maker-side; retain raw side only.
-                            # Coinbase match side is the maker side; invert to aggressor side.
+                            # Coinbase match side is maker-side; invert to aggressor side.
                             aggressor_side = self._coinbase_aggressor_side(msg.get("side"))
-                            self.coinbase.trades.append((now, p, q, aggressor_side))
+                            self.coinbase.ingest_trade(now, p, q, aggressor_side)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -291,8 +303,7 @@ class MultiExchangeReference:
                         elif channel == "trade":
                             for trade in data_rows:
                                 p, q = float(trade["price"]), float(trade["qty"])
-                                self.kraken.last_trade_price, self.kraken.last_trade_ts = p, now
-                                self.kraken.trades.append((now, p, q, str(trade.get("side", "")).lower()))
+                                self.kraken.ingest_trade(now, p, q, str(trade.get("side", "")).lower())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
