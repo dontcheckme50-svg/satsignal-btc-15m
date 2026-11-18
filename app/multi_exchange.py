@@ -47,7 +47,9 @@ class VenueBook:
         mid = (bid + ask) / 2.0
         bid_depth = sum(p * q for p, q in bids)
         ask_depth = sum(p * q for p, q in asks)
-        imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth) if bid_depth + ask_depth else 0.0
+        bid_depth_25bps = sum(p * q for p, q in bids if p >= mid * 0.9975)
+        ask_depth_25bps = sum(p * q for p, q in asks if p <= mid * 1.0025)
+        imbalance = (bid_depth_25bps - ask_depth_25bps) / (bid_depth_25bps + ask_depth_25bps) if bid_depth_25bps + ask_depth_25bps else 0.0
         return {
             "venue": self.name, "quote": self.quote, "status": "LIVE", "age_seconds": round(age, 3),
             "last_trade_price": self.last_trade_price,
