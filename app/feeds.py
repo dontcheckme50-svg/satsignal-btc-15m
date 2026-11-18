@@ -266,8 +266,8 @@ class MarketDataHub:
         venue_statuses.append(FeedStatus(
             name="Multi-Exchange Reference",
             status=multi["status"],
-            last_updated_iso=iso_now(multi["timestamp"]),
-            age_seconds=0.0,
+            last_updated_iso=iso_now(multi["reference_timestamp"]) if multi.get("reference_timestamp") else None,
+            age_seconds=multi.get("reference_age_seconds"),
             detail=f"Reference={multi.get('reference_price')} | live venues={multi['venue_count_live']} | outliers={multi['outlier_venues']}",
         ))
         return [
