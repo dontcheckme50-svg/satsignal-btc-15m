@@ -425,6 +425,40 @@ def test_brti_parser_rejects_nonfinite_and_nonpositive_values():
     assert hub._parse_brti_value("invalid") is None
 
 
+def test_brti_payload_parses_documented_array_and_uses_source_timestamp():
+    hub = MarketDataHub()
+    now = 1_800_000_000.0
+    parsed = hub._parse_brti_payload({
+        "serverTime": "2027-01-15T08:00:00Z",
+        "payload": [
+            {"value": "89999.50", "time": int((now - 2.0) * 1000)},
+            {"value": "90001.25", "time": int((now - 0.5) * 1000)},
+        ],
+    }, now=now)
+
+    assert parsed == (90001.25, now - 0.5)
+
+
+def test_brti_payload_accepts_direct_pass_through_envelope():
+    now = 1_800_000_000.0
+    parsed = MarketDataHub._parse_brti_payload({
+        "data": {"payload": [{"value": "90000.5", "time": int(now * 1000)}]}
+    }, now=now)
+
+    assert parsed == (90000.5, now)
+
+
+@pytest.mark.parametrize("item", [
+    {"value": "90000", "time": 1_799_999_000_000},
+    {"value": "90000", "time": 1_800_000_010_000},
+    {"value": "90000", "time": 1_800_000_000_000, "repeatOfPreviousValue": True},
+    {"value": "nan", "time": 1_800_000_000_000},
+    {"value": "90000", "time": None},
+])
+def test_brti_payload_rejects_stale_future_repeated_or_invalid_values(item):
+    assert MarketDataHub._parse_brti_payload({"payload": [item]}, now=1_800_000_000.0) is None
+
+
 
 def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch, tmp_path):
     from app.orchestrator import PredictorOrchestrator
