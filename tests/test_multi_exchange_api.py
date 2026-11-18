@@ -9,6 +9,7 @@ def test_multi_exchange_shadow_endpoint():
     payload = response.json()
     assert "reference_price" in payload
     assert "venues" in payload
+    assert all("status" in venue and "connected" in venue and "age_seconds" in venue for venue in payload["venues"])
     assert "reference_vs_primary_bps" in payload
     assert "reference_vs_brti_bps" in payload
     assert "reference_vs_strike_bps" in payload
