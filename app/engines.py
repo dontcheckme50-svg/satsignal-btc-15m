@@ -18,7 +18,15 @@ class EvidenceEngine:
         # Only use observed trades within this contract and at/before the snapshot time.
         cvd = sum((t[2] if not t[3] else -t[2]) for t in trades if contract.open_timestamp <= t[0] <= now)
         trades_10m = [t for t in trades if now - 600.0 <= t[0] <= now]
-        avg_1m_vol = (sum(t[2] for t in trades_10m) / 10.0) if trades_10m else 0.0
+        # Normalize against the amount of observed history. A short startup
+        # sample must not be divided by a full ten minutes and create a false
+        # volume-spike signal.
+        if trades_10m:
+            observed_seconds = min(600.0, max(60.0, now - min(t[0] for t in trades_10m)))
+            observed_minutes = observed_seconds / 60.0
+            avg_1m_vol = sum(t[2] for t in trades_10m) / observed_minutes
+        else:
+            avg_1m_vol = 0.0
         vol_ratio = round(tot_vol_60s / avg_1m_vol, 2) if avg_1m_vol > 1e-6 else 1.0
         bid_depth, ask_depth = sum(q for _, q in bids[:10]), sum(q for _, q in asks[:10])
         obi = (bid_depth - ask_depth) / (bid_depth + ask_depth) if (bid_depth + ask_depth) > 0 else 0.0
