@@ -331,3 +331,75 @@ def test_contract_rollover_resets_directional_confirmation(tmp_path):
     assert not ledger.has_official_prediction_lock(second.ticker)
     assert orchestrator._directional_lock_candidate_ticker == second.ticker
     assert orchestrator._directional_lock_candidate_count == 1
+
+
+def test_rollover_feed_outage_cannot_carry_lock_confirmation_and_recovers_once(tmp_path):
+    from app.config import settings
+
+    ledger = PredictionLedger(str(tmp_path / "rollover-feed-recovery.db"))
+    start = 1_800_000_000.0
+    first = _official_contract("KXBTC15M-ROLL-OLD", start)
+    hub = _ready_hub(first, start)
+    hub.bids, hub.asks = [(90009.0, 2.0)], [(90011.0, 2.0)]
+    hub.last_book_ts = start
+    hub.last_book_source = hub.active_spot_source
+    orchestrator = PredictorOrchestrator(hub, ledger)
+
+    # Keep the test deterministic while preserving the production feed gate:
+    # a healthy cycle is directional, but any degraded feed must produce WAIT.
+    orchestrator.final_engine.decide = (
+        lambda ev, weakness, regime, early, contract, weights:
+        _final_report(Signal.WAIT if weakness.feed_degraded else Signal.UP)
+    )
+
+    orchestrator.evaluate_once(now=start)
+    first_lock_cycle = orchestrator.evaluate_once(now=start + 1.0)
+    assert first_lock_cycle is not None
+    assert ledger.has_official_prediction_lock(first.ticker)
+    assert orchestrator._directional_lock_candidate_count == 0
+
+    # New official contract arrives while both cached market feeds are stale.
+    rollover_ts = start + 2.0
+    second = _official_contract("KXBTC15M-ROLL-NEW", rollover_ts)
+    hub.kalshi_contract = second
+    hub.last_kalshi_ts = rollover_ts
+    hub.last_spot_ts = rollover_ts - settings.stale_feed_threshold_sec - 1.0
+    hub.last_book_ts = rollover_ts - settings.stale_feed_threshold_sec - 1.0
+
+    stale = orchestrator.evaluate_once(now=rollover_ts)
+    assert stale is not None
+    assert stale.contract.ticker == second.ticker
+    assert stale.final.signal == Signal.WAIT
+    assert stale.engines.engine_a_evidence["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_c_regime["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_d_early["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_e_final["status"] == "BLOCKED_STALE_INPUT"
+    assert orchestrator._directional_lock_candidate_ticker is None
+    assert orchestrator._directional_lock_candidate_count == 0
+    assert not ledger.has_official_prediction_lock(second.ticker)
+
+    # First fresh cycle starts a brand-new confirmation; it cannot inherit the
+    # prior contract's two UP decisions or the outage interval.
+    recovered_ts = rollover_ts + 1.0
+    hub.last_spot_ts = recovered_ts
+    hub.last_book_ts = recovered_ts
+    hub.last_kalshi_ts = recovered_ts
+    hub.live_price = 90020.0
+    recovered_once = orchestrator.evaluate_once(now=recovered_ts)
+    assert recovered_once is not None
+    assert recovered_once.engines.engine_a_evidence["status"] == "ACTIVE"
+    assert recovered_once.engines.engine_c_regime["status"] == "ACTIVE"
+    assert recovered_once.engines.engine_e_final["status"] == "ACTIVE"
+    assert not ledger.has_official_prediction_lock(second.ticker)
+    assert orchestrator._directional_lock_candidate_ticker == second.ticker
+    assert orchestrator._directional_lock_candidate_count == 1
+
+    recovered_twice = orchestrator.evaluate_once(now=recovered_ts + 1.0)
+    assert recovered_twice is not None
+    assert ledger.has_official_prediction_lock(second.ticker)
+    assert orchestrator._directional_lock_candidate_count == 0
+
+    records = ledger.get_recent_predictions(limit=10)
+    assert len(records) == 2
+    assert {record.contract_ticker for record in records} == {first.ticker, second.ticker}
+    assert ledger.get_scoreboard().total_predictions == 2
