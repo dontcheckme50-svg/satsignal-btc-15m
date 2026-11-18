@@ -273,16 +273,16 @@ class MarketDataHub:
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
         spot_age = safe_age_seconds(self.last_spot_ts, now)
-        spot_status = "UNAVAILABLE" if spot_age is None else ("STALE" if spot_age > settings.stale_feed_threshold_sec else ("LIVE" if self.active_spot_source == "BINANCE_SPOT" else "FALLBACK"))
+        spot_status = "FUTURE_TIMESTAMP" if self.last_spot_ts and spot_age is None else ("UNAVAILABLE" if spot_age is None else ("STALE" if spot_age > settings.stale_feed_threshold_sec else ("LIVE" if self.active_spot_source == "BINANCE_SPOT" else "FALLBACK")))
         book_age = safe_age_seconds(self.last_book_ts, now)
-        book_status = "LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE")
+        book_status = "FUTURE_TIMESTAMP" if self.last_book_ts and book_age is None else ("LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE"))
         kalshi_age = safe_age_seconds(self.last_kalshi_ts, now)
         kalshi_status = (
             "LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
         )
         brti_age = round(now - self.last_brti_ts, 2) if self.last_brti_ts else None
-        brti_display_status = "STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status
+        brti_display_status = "FUTURE_TIMESTAMP" if self.last_brti_ts and brti_age is None else ("STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status)
         multi = self.get_multi_exchange_snapshot()
         venue_statuses = []
         for venue in multi.get("venues", []):
