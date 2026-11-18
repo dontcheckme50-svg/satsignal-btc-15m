@@ -1,6 +1,6 @@
 import asyncio, time
 from contextlib import asynccontextmanager
-from typing import Set
+from typing import Optional, Set
 import uvicorn
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
