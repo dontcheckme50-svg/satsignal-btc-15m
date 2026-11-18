@@ -1,5 +1,6 @@
 import time
 
+import app.multi_exchange as multi_exchange_module
 from app.multi_exchange import MultiExchangeReference, VenueBook
 
 
@@ -93,3 +94,8 @@ def test_near_market_depth_imbalance_uses_25bps_window():
     assert snapshot["bid_depth_25bps"] == 200.0
     assert snapshot["ask_depth_25bps"] == 100.2
     assert snapshot["imbalance"] > 0.0
+
+
+def test_bitstamp_polling_dependency_is_imported():
+    # Catch startup-time NameErrors before the Bitstamp background task is launched.
+    assert multi_exchange_module.aiohttp.ClientSession is not None
