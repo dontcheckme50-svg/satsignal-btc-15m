@@ -173,6 +173,8 @@ class MarketDataHub:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        for runtime in self._feed_runtime.values():
+            runtime["state"] = "STOPPED"
         await self.multi_exchange.stop()
 
     def get_multi_exchange_snapshot(self) -> dict:
