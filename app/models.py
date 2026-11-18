@@ -114,6 +114,9 @@ class PredictionRecord(BaseModel):
     up_prob: float
     down_prob: float
     regime: MarketRegime
+    brti_cohort: str = "UNKNOWN"
+    brti_side_at_lock: Optional[str] = None
+    spot_side_at_lock: Optional[str] = None
     settled: bool = False
     settlement_source: Optional[str] = None
     settlement_price: Optional[float] = None
