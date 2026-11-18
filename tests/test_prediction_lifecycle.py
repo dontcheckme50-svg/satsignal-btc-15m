@@ -56,6 +56,11 @@ def test_contract_rollover_resets_observation_throttle(tmp_path):
     assert second_snapshot.contract.ticker == second.ticker
     assert {item["contract_ticker"] for item in observations} == {first.ticker, second.ticker}
     assert len(observations) == 2
+    shadow_history = ledger.get_multi_exchange_reference_history(limit=10)
+    assert {item["contract_ticker"] for item in shadow_history} == {first.ticker, second.ticker}
+    # A new contract receives its first shadow sample immediately, even when
+    # the prior contract's five-second logging interval has not elapsed.
+    assert len(shadow_history) == 2
     # Observations are not scored predictions.
     assert ledger.get_recent_predictions(limit=10) == []
     assert ledger.get_scoreboard().total_predictions == 0
