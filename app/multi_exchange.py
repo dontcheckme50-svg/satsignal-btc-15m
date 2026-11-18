@@ -29,8 +29,34 @@ class VenueBook:
         else:
             book[price] = qty
 
+    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180)) -> dict:
+        now = time.time() if now is None else now
+        latest_trade_age = max(0.0, now - self.last_trade_ts) if self.last_trade_ts else None
+        result = {
+            "latest_trade_age_seconds": round(latest_trade_age, 3) if latest_trade_age is not None else None,
+            "windows": {},
+        }
+        for window in windows:
+            recent = [trade for trade in self.trades if trade[0] >= now - window]
+            buy_volume = sum(qty for _, _, qty, side in recent if side == "buy")
+            sell_volume = sum(qty for _, _, qty, side in recent if side == "sell")
+            unknown_volume = sum(qty for _, _, qty, side in recent if side not in ("buy", "sell"))
+            classified_volume = buy_volume + sell_volume
+            delta = buy_volume - sell_volume
+            result["windows"][str(window)] = {
+                "trade_count": len(recent),
+                "buy_volume_btc": round(buy_volume, 8),
+                "sell_volume_btc": round(sell_volume, 8),
+                "unknown_volume_btc": round(unknown_volume, 8),
+                "delta_btc": round(delta, 8),
+                "delta_ratio": round(delta / classified_volume, 6) if classified_volume else None,
+                "classified_volume_btc": round(classified_volume, 8),
+                "status": "ACTIVE" if classified_volume > 0 else ("NO_TRADES" if recent else "QUIET"),
+            }
+        return result
+
     def snapshot(self, now: Optional[float] = None, max_levels: int = 20) -> dict:
-        now = now or time.time()
+        now = time.time() if now is None else now
         bids = sorted(self.bids.items(), reverse=True)[:max_levels]
         asks = sorted(self.asks.items())[:max_levels]
         age = max(0.0, now - self.last_book_ts) if self.last_book_ts else None
@@ -42,6 +68,7 @@ class VenueBook:
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
                 "bid_depth": 0.0, "ask_depth": 0.0, "bid_depth_25bps": 0.0, "ask_depth_25bps": 0.0, "imbalance": None, "levels": 0,
                 "last_error": self.last_error, "reconnects": self.reconnects,
+                "trade_flow": self.trade_flow_snapshot(now),
             }
         bid, bid_qty = bids[0]
         ask, ask_qty = asks[0]
@@ -60,6 +87,7 @@ class VenueBook:
             "bid_depth": bid_depth, "ask_depth": ask_depth, "bid_depth_25bps": bid_depth_25bps, "ask_depth_25bps": ask_depth_25bps, "imbalance": imbalance,
             "top_bid_qty": bid_qty, "top_ask_qty": ask_qty, "levels": min(len(bids), len(asks)),
             "last_error": self.last_error, "reconnects": self.reconnects,
+            "trade_flow": self.trade_flow_snapshot(now),
         }
 
 
@@ -129,7 +157,10 @@ class MultiExchangeReference:
                             p, q = float(msg["price"]), float(msg["size"])
                             self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
                             # Coinbase Exchange side is maker-side; retain raw side only.
-                            self.coinbase.trades.append((now, p, q, str(msg.get("side", "")).lower()))
+                            # Coinbase match side is the maker side; invert to aggressor side.
+                            maker_side = str(msg.get("side", "")).lower()
+                            aggressor_side = "sell" if maker_side == "buy" else ("buy" if maker_side == "sell" else "unknown")
+                            self.coinbase.trades.append((now, p, q, aggressor_side))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -228,6 +259,28 @@ class MultiExchangeReference:
                 self.bitstamp.reconnects += 1
                 await asyncio.sleep(1.5)
 
+    @staticmethod
+    def _aggregate_trade_flow(venues: List[dict], windows=(15, 60, 180)) -> dict:
+        aggregate = {"windows": {}}
+        for window in windows:
+            buy = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("buy_volume_btc", 0.0) for v in venues)
+            sell = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("sell_volume_btc", 0.0) for v in venues)
+            unknown = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("unknown_volume_btc", 0.0) for v in venues)
+            count = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("trade_count", 0) for v in venues)
+            classified = buy + sell
+            delta = buy - sell
+            aggregate["windows"][str(window)] = {
+                "trade_count": count,
+                "buy_volume_btc": round(buy, 8),
+                "sell_volume_btc": round(sell, 8),
+                "unknown_volume_btc": round(unknown, 8),
+                "delta_btc": round(delta, 8),
+                "delta_ratio": round(delta / classified, 6) if classified else None,
+                "classified_volume_btc": round(classified, 8),
+                "status": "ACTIVE" if classified > 0 else ("NO_TRADES" if count else "QUIET"),
+            }
+        return aggregate
+
     def get_snapshot(self, now: Optional[float] = None) -> dict:
         now = now or time.time()
         venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.bitstamp.snapshot(now), self.binance.snapshot(now)]
@@ -260,6 +313,7 @@ class MultiExchangeReference:
             "included_venues": [v["venue"] for v in accepted],
             "outlier_venues": excluded,
             "venues": venues,
+            "trade_flow": self._aggregate_trade_flow(venues),
             "consolidated_bid_depth_usd_within_25bps": total_bid_depth,
             "consolidated_ask_depth_usd_within_25bps": total_ask_depth,
             "consolidated_imbalance": imbalance,
