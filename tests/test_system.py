@@ -1171,14 +1171,20 @@ def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks
     report_rows = {row["cohort"]: row for row in report["cohorts"]}
     assert report_rows["AGREE_UP"]["vs_baseline_pct_points"] == 50.0
     assert report_rows["DISAGREE"]["vs_baseline_pct_points"] == -50.0
+    assert report_rows["AGREE_UP"]["sample_status"] == "LIMITED_SAMPLE"
+    assert report_rows["DISAGREE"]["minimum_descriptive_sample"] == 30
+    assert report["brti_vs_spot"]["sample_status"] == "LIMITED_SAMPLE"
+    assert report["brti_vs_spot"]["minimum_descriptive_sample"] == 30
     assert report["brti_vs_spot"] == {
         "sample_size": 2,
+        "sample_status": "LIMITED_SAMPLE",
+        "minimum_descriptive_sample": 30,
         "brti": {"correct": 2, "incorrect": 0, "accuracy_pct": 100.0},
         "spot": {"correct": 1, "incorrect": 1, "accuracy_pct": 50.0},
         "brti_minus_spot_pct_points": 50.0,
         "note": "Paired settled locks only; descriptive comparison, not proof of predictive lift.",
     }
-    assert "not proof of predictive lift" in report["interpretation"]
+    assert "not statistical significance or proof of predictive lift" in report["interpretation"]
 
 @pytest.mark.parametrize(
     "brti_mode,expected_cohort",
