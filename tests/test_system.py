@@ -684,3 +684,23 @@ async def test_prediction_loop_does_not_wait_for_settlement_worker(monkeypatch, 
     assert settlement["started"] is True
     assert settlement["completed"] is False
     await orchestrator.shutdown_background_tasks()
+
+
+
+def test_stale_order_book_is_excluded_and_degrades_prediction(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.bids = [(90009.0, 100.0)]
+    hub.asks = [(90011.0, 1.0)]
+    hub.last_book_ts = now - 30.0
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger(str(tmp_path / "stale-book.db")))
+
+    snapshot = orchestrator.evaluate_once(now=now, record_to_db=False)
+
+    assert snapshot.weakness.feed_degraded is True
+    assert any("order-book feed" in flag for flag in snapshot.weakness.flags)
+    assert snapshot.evidence.orderbook_imbalance == 0.0
+    assert snapshot.final.signal == Signal.WAIT
