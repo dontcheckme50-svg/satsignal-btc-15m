@@ -269,6 +269,7 @@ def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     assert evidence.trade_delta_60s == 0.2
     assert evidence.cvd_contract == 0.2
     assert evidence.buying_pressure_pct == 75.0
+    assert evidence.volume_ratio == 1.0  # startup sample is too short for a baseline
 
 
 
@@ -331,3 +332,17 @@ async def test_synthetic_contracts_are_not_settled_with_later_fallback_price(tmp
     assert pending[0].settled is False
     assert pending[0].settlement_source is None
     assert ledger.get_scoreboard().pending_predictions == 1
+
+
+
+def test_one_second_bars_use_previous_second_last_trade_price():
+    hub = MarketDataHub()
+    now = time.time()
+    sec = int(now)
+    hub.ingest_trade(sec + 0.1, 90000.0, 0.2, False, "TEST")
+    hub.ingest_trade(sec + 0.4, 90005.0, 0.3, False, "TEST")
+    hub.ingest_trade(sec + 1.1, 90010.0, 0.1, False, "TEST")
+
+    assert hub.bars_1s[-1][0] == sec
+    assert hub.bars_1s[-1][1] == 90005.0
+    assert hub.bars_1s[-1][2] == pytest.approx(0.5)
