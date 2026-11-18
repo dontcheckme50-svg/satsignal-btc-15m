@@ -107,7 +107,7 @@ async def get_scoreboard():
 
 @app.get("/api/brti-cohorts")
 async def get_brti_cohorts():
-    return {"cohorts": ledger.get_brti_cohort_performance()}
+    return ledger.get_brti_cohort_report()
 
 @app.get("/api/trades")
 async def get_trades(limit: int = Query(default=30, ge=1, le=200)):
