@@ -9,6 +9,16 @@ from app.config import settings
 from app.models import ContractInfo, FeedStatus
 from app.multi_exchange import MultiExchangeReference
 
+def safe_age_seconds(ts: Optional[float], now: Optional[float] = None) -> Optional[float]:
+    if not ts:
+        return None
+    now = time.time() if now is None else now
+    raw_age = now - float(ts)
+    if raw_age < -0.5:
+        return None
+    return max(0.0, raw_age)
+
+
 def iso_now(ts: Optional[float] = None) -> str:
     t = ts if ts is not None else time.time()
     return datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -101,8 +111,8 @@ class MarketDataHub:
             self.multi_exchange.ingest_binance(self.live_price, list(self.bids), list(self.asks), self.last_spot_ts)
         snapshot = self.multi_exchange.get_snapshot()
         now = time.time()
-        primary_age = round(now - self.last_spot_ts, 3) if self.last_spot_ts else None
-        brti_age = round(now - self.last_brti_ts, 3) if self.last_brti_ts else None
+        primary_age = safe_age_seconds(self.last_spot_ts, now)
+        brti_age = safe_age_seconds(self.last_brti_ts, now)
         primary_fresh = primary_age is not None and primary_age <= settings.stale_feed_threshold_sec
         brti_fresh = self.brti_status == "LIVE" and brti_age is not None and brti_age <= settings.stale_feed_threshold_sec
         primary_price = self.live_price if primary_fresh else None
@@ -262,11 +272,11 @@ class MarketDataHub:
 
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
-        spot_age = round(now - self.last_spot_ts, 2) if self.last_spot_ts else None
+        spot_age = safe_age_seconds(self.last_spot_ts, now)
         spot_status = "UNAVAILABLE" if spot_age is None else ("STALE" if spot_age > settings.stale_feed_threshold_sec else ("LIVE" if self.active_spot_source == "BINANCE_SPOT" else "FALLBACK"))
-        book_age = round(now - self.last_book_ts, 2) if self.last_book_ts else None
+        book_age = safe_age_seconds(self.last_book_ts, now)
         book_status = "LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE")
-        kalshi_age = round(now - self.last_kalshi_ts, 2) if self.last_kalshi_ts else None
+        kalshi_age = safe_age_seconds(self.last_kalshi_ts, now)
         kalshi_status = (
             "LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
