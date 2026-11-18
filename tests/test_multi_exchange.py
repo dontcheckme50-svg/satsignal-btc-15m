@@ -60,3 +60,19 @@ def test_stale_book_is_not_counted_as_live():
 
     assert snapshot["status"] == "STALE"
     assert snapshot["mid"] is None
+
+
+def test_reference_uses_only_usd_venues_for_composite():
+    reference = MultiExchangeReference()
+    _book(reference.coinbase, 90000, 90010, 5.0)
+    _book(reference.kraken, 90002, 90012, 3.0)
+    _book(reference.binance, 92000, 92010, 10.0)
+
+    snapshot = reference.get_snapshot()
+
+    assert snapshot["status"] == "LIVE"
+    assert snapshot["usd_venue_count_live"] == 2
+    assert snapshot["venue_count_live"] == 3
+    assert set(snapshot["included_venues"]) == {"COINBASE", "KRAKEN"}
+    assert snapshot["reference_age_seconds"] is not None
+    assert snapshot["reference_timestamp"] is not None
