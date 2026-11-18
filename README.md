@@ -7,7 +7,7 @@ A FastAPI monitoring and prediction service for BTC 15-minute Kalshi markets. Th
 - This release is **paper-only**. The execution manager cannot submit demo or production orders.
 - Paper entries require an active official `KXBTC15M` contract, an official strike, and a real Kalshi ask quote.
 - Synthetic fallback windows are dashboard-only and cannot generate paper trades or enter the official prediction scoreboard.
-- The scoreboard counts one official prediction lock per contract. Live engine snapshots are stored separately as observations and never inflate prediction totals. A directional Final Decision locks once when actionable; otherwise WAIT is locked at the 65-second final-entry cutoff. Locks are immutable and settlement grades only the lock.
+- The scoreboard counts one official prediction lock per contract. Live engine snapshots are stored separately as observations and never inflate prediction totals. A directional Final Decision must agree on two consecutive one-second evaluations for the same official contract before it locks; WAIT, reversal, or contract rollover resets confirmation. If no confirmed direction exists at the 65-second final-entry cutoff, WAIT is locked. Locks are immutable and settlement grades only the lock.
 - `/api/prediction-observations` returns the separate rolling observation history for analysis (limit 1,000; optional contract ticker filter).
 - Prediction accuracy is based on settled official-contract locks. Pending locks are not wins or losses; WAIT signals are excluded from directional accuracy.
 - Paper-trading P&L is reported separately from prediction accuracy.
