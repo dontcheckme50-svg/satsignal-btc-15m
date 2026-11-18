@@ -210,6 +210,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
       <div class="kv"><span>Cross-Venue Aggressor Delta (15s / 60s)</span><span id="mx-flow-delta">--</span></div>
       <div class="kv"><span>60s Buy / Sell Volume (BTC)</span><span id="mx-flow-volume">--</span></div>
+      <div class="kv"><span>60s Flow Sources</span><span id="mx-flow-sources">--</span></div>
       <div class="kv"><span>Reference vs Primary Spot</span><span id="mx-primary-diff">--</span></div>
       <div class="kv"><span>Reference vs Official BRTI</span><span id="mx-brti-diff">--</span></div>
       <div class="kv"><span>Reference vs Contract Strike</span><span id="mx-strike-diff">--</span></div>
@@ -311,6 +312,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const deltaFmt = (f) => !f ? "--" : (f.status!=="ACTIVE" ? f.status : ((f.delta_btc>0?"+":"")+Number(f.delta_btc).toFixed(4)+" BTC"));
       document.getElementById("mx-flow-delta").textContent = deltaFmt(flow15)+" / "+deltaFmt(flow60)+(flow60?.status==="ACTIVE"&&flow60.delta_ratio!=null?" ("+(flow60.delta_ratio*100).toFixed(1)+"%)":"");
       document.getElementById("mx-flow-volume").textContent = flow60?.status==="ACTIVE" ? Number(flow60.buy_volume_btc||0).toFixed(4)+" / "+Number(flow60.sell_volume_btc||0).toFixed(4) : (flow60?.status||"--");
+      document.getElementById("mx-flow-sources").textContent = flow60?.source_venues?.join(", ") || "--";
       document.getElementById("mx-primary-diff").textContent = m.reference_vs_primary_bps == null ? "--" : (m.reference_vs_primary_bps>0?"+":"")+m.reference_vs_primary_bps.toFixed(2)+" bps";
       document.getElementById("mx-brti-diff").textContent = m.reference_vs_brti_bps == null ? "--" : (m.reference_vs_brti_bps>0?"+":"")+m.reference_vs_brti_bps.toFixed(2)+" bps";
       document.getElementById("mx-strike-diff").textContent = m.reference_vs_strike_bps == null ? "--" : (m.reference_vs_strike_bps>0?"+":"")+m.reference_vs_strike_bps.toFixed(2)+" bps";
