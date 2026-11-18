@@ -119,7 +119,15 @@ class PredictorOrchestrator:
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
         book_age = safe_age_seconds(self.hub.last_book_ts, ts)
-        book_fresh = book_age is not None and book_age <= settings.stale_feed_threshold_sec
+        book_source_matches = bool(
+            self.hub.active_spot_source
+            and self.hub.last_book_source == self.hub.active_spot_source
+        )
+        book_fresh = (
+            book_age is not None
+            and book_age <= settings.stale_feed_threshold_sec
+            and book_source_matches
+        )
         evidence_bids = list(self.hub.bids) if book_fresh else []
         evidence_asks = list(self.hub.asks) if book_fresh else []
         multi_reference = self.hub.get_multi_exchange_snapshot()
@@ -158,7 +166,9 @@ class PredictorOrchestrator:
             official_brti_price=official_brti_price,
             official_brti_age_sec=brti_age if brti_is_fresh else None,
         )
-        weakness = self.weakness_engine.analyze(ev, spot_age, book_age)
+        weakness = self.weakness_engine.analyze(
+            ev, spot_age, book_age, book_source_matches=book_source_matches
+        )
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
@@ -291,7 +301,15 @@ class PredictorOrchestrator:
         book_age = safe_age_seconds(self.hub.last_book_ts, now)
         kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, now)
         spot_fresh = spot_age is not None and spot_age <= settings.stale_feed_threshold_sec
-        book_fresh = book_age is not None and book_age <= settings.stale_feed_threshold_sec
+        book_source_matches = bool(
+            self.hub.active_spot_source
+            and self.hub.last_book_source == self.hub.active_spot_source
+        )
+        book_fresh = (
+            book_age is not None
+            and book_age <= settings.stale_feed_threshold_sec
+            and book_source_matches
+        )
         kalshi_fresh = kalshi_age is not None and kalshi_age <= 12.0
         official_contract_active = bool(
             self.active_contract is not None
@@ -330,6 +348,7 @@ class PredictorOrchestrator:
             "market_data_ready": market_data_ready,
             "spot_age_seconds": None if spot_age is None else round(spot_age, 2),
             "order_book_age_seconds": None if book_age is None else round(book_age, 2),
+            "order_book_source_matches_spot": book_source_matches,
             "kalshi_age_seconds": None if kalshi_age is None else round(kalshi_age, 2),
             "official_contract_active": official_contract_active,
             "official_brti_status": self.hub.brti_status,
