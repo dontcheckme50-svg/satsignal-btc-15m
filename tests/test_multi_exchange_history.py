@@ -40,6 +40,7 @@ def test_multi_exchange_reference_history_persists_and_calculates_basis(tmp_path
     assert row["official_brti_age_seconds"] == 0.4
     assert row["ref_vs_primary_bps"] == 1.1112
     assert row["ref_vs_brti_bps"] == 2.2227
+    assert row["reference_vs_strike_bps"] == -1.111
     assert row["included_venues"] == ["COINBASE", "KRAKEN", "BITSTAMP"]
     assert row["venues"][0]["venue"] == "COINBASE"
 
