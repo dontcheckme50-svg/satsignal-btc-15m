@@ -361,15 +361,31 @@ class PredictionLedger:
             return int(cur.lastrowid)
 
     def get_unsettled_contract_tickers(self) -> List[str]:
-        # Only official contracts have an authoritative settlement source.
-        # Synthetic proxy contracts must never enter the official settlement queue.
+        # Reconcile both official forecast locks and open paper trades. A trade
+        # can legitimately open before the two-vote forecast lock exists.
+        # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
             rows = conn.execute(
-                """SELECT contract_ticker, MIN(epoch_ts) AS first_prediction_ts
-                   FROM predictions
-                   WHERE settled = 0 AND is_official_lock = 1 AND contract_ticker LIKE 'KXBTC15M%'
+                """WITH pending AS (
+                       SELECT contract_ticker, MIN(epoch_ts) AS first_seen
+                       FROM predictions
+                       WHERE settled = 0 AND is_official_lock = 1
+                         AND contract_ticker LIKE 'KXBTC15M%'
+                       GROUP BY contract_ticker
+                       UNION ALL
+                       SELECT contract_ticker,
+                              COALESCE(
+                                  CAST(strftime('%s', substr(MIN(timestamp_iso), 1, 19)) AS REAL),
+                                  0.0
+                              ) AS first_seen
+                       FROM trades
+                       WHERE status = 'OPEN' AND contract_ticker LIKE 'KXBTC15M%'
+                       GROUP BY contract_ticker
+                   )
+                   SELECT contract_ticker, MIN(first_seen) AS first_seen
+                   FROM pending
                    GROUP BY contract_ticker
-                   ORDER BY first_prediction_ts ASC"""
+                   ORDER BY first_seen ASC"""
             ).fetchall()
             return [r["contract_ticker"] for r in rows]
 
