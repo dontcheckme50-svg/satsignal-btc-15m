@@ -614,3 +614,22 @@ def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_pa
     assert second is None
     assert len(ledger.get_recent_trades()) == 1
     assert ledger.get_recent_trades()[0].status == "SETTLED"
+
+
+
+@pytest.mark.parametrize("stale_feed", ["spot", "kalshi"])
+def test_execution_refuses_stale_feed_independent_of_prediction(tmp_path, stale_feed):
+    ledger = PredictionLedger(str(tmp_path / f"execution-stale-{stale_feed}.db"))
+    contract = _contract()
+    hub = _fresh_execution_hub(contract)
+    if stale_feed == "spot":
+        hub.last_spot_ts = time.time() - 30.0
+    else:
+        hub.last_kalshi_ts = time.time() - 20.0
+    manager = ExecutionManager(hub, ledger)
+
+    import asyncio
+    result = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
