@@ -325,7 +325,7 @@ class PredictionLedger:
             rows = conn.execute("SELECT * FROM predictions WHERE is_official_lock = 1 ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
             return [
                 PredictionRecord(
-                    id=r["id"], contract_ticker=r["contract_ticker"], timestamp_iso=r["timestamp_iso"],
+                    id=r["id"], is_official_lock=bool(r["is_official_lock"]), contract_ticker=r["contract_ticker"], timestamp_iso=r["timestamp_iso"],
                     epoch_ts=r["epoch_ts"], strike_price=r["strike_price"], btc_price_at_pred=r["btc_price_at_pred"],
                     seconds_remaining=r["seconds_remaining"], main_signal=Signal(r["main_signal"]),
                     early_signal=Signal(r["early_signal"]), final_signal=Signal(r["final_signal"]),
