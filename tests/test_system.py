@@ -372,3 +372,28 @@ def test_primary_binance_feed_is_not_mirrored_into_independent_shadow_venue():
 
     assert shadow_binance["status"] == "UNAVAILABLE"
     assert shadow_binance["mid"] is None
+
+
+
+def test_coinbase_fallback_ticker_never_invents_liquidity_sizes():
+    hub = MarketDataHub()
+
+    assert hub._coinbase_ticker_book({"best_bid": "90000", "best_ask": "90001"}) is None
+    assert hub._coinbase_ticker_book({
+        "best_bid": "90000", "best_ask": "90001",
+        "best_bid_size": "2", "best_ask_size": "3",
+    }) == ([(90000.0, 2.0)], [(90001.0, 3.0)])
+    assert hub._coinbase_ticker_book({
+        "best_bid": "90002", "best_ask": "90001",
+        "best_bid_size": "2", "best_ask_size": "3",
+    }) is None
+
+
+def test_kalshi_feed_future_timestamp_is_not_live():
+    hub = MarketDataHub()
+    hub.last_kalshi_ts = time.time() + 5.0
+    hub.kalshi_contract = _contract(open_timestamp=time.time() - 10.0, close_timestamp=time.time() + 500.0)
+
+    statuses = {item.name: item.status for item in hub.get_feed_statuses()}
+
+    assert statuses["Kalshi KXBTC15M"] == "FUTURE_TIMESTAMP"
