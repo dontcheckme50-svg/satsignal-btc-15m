@@ -1296,3 +1296,38 @@ def test_settlement_without_official_result_requires_a_valid_contract_price(tmp_
     row = ledger.get_recent_predictions(limit=1)[0]
     assert row.settled is False
     assert row.actual_outcome is None
+
+
+@pytest.mark.parametrize("side,expected_pnl", [("YES", 0.79), ("NO", -0.21)])
+def test_verified_outcome_settles_paper_trade_without_prediction_lock(
+    tmp_path, side, expected_pnl
+):
+    ledger = PredictionLedger(str(tmp_path / f"trade-without-lock-{side}.db"))
+    ledger.record_trade(TradeRecord(
+        mode="paper",
+        contract_ticker="KXBTC15M-TRADE-WITHOUT-LOCK",
+        timestamp_iso="2026-11-18 00:00:00 UTC",
+        side=side,
+        contracts=1,
+        entry_price=0.20,
+        quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01,
+        fair_prob_at_entry=0.70,
+        net_edge=0.49,
+        status="OPEN",
+        notes="Trade may be opened before the two-vote official forecast lock.",
+    ))
+
+    # The official Kalshi result remains authoritative even when expiration_value
+    # is missing and no scored prediction row exists for this contract.
+    ledger.settle_contract(
+        "KXBTC15M-TRADE-WITHOUT-LOCK",
+        settlement_price=None,
+        official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    )
+
+    trades = ledger.get_recent_trades(limit=1)
+    assert len(trades) == 1
+    assert trades[0].status == "SETTLED"
+    assert trades[0].pnl_usd == pytest.approx(expected_pnl)
