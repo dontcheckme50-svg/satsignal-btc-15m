@@ -78,7 +78,7 @@ class MultiExchangeReference:
         self._running = True
         self._tasks = [
             asyncio.create_task(self._coinbase_loop(), name="multi-coinbase"),
-            asyncio.create_task(self._kraken_loop(), name="multi-kraken"),
+            asyncio.create_task(self._kraken_loop(), name="multi-kraken"),\n            asyncio.create_task(self._bitstamp_poll_loop(), name="multi-bitstamp"),
         ]
 
     async def stop(self):
@@ -180,9 +180,41 @@ class MultiExchangeReference:
                 self.kraken.reconnects += 1
                 await asyncio.sleep(1.5)
 
+    async def _bitstamp_poll_loop(self):
+        book_url = "https://www.bitstamp.net/api/v2/order_book/btcusd/?group=1"
+        ticker_url = "https://www.bitstamp.net/api/v2/ticker/btcusd/"
+        while self._running:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async def get_json(url):
+                        async with session.get(url, timeout=4) as response:
+                            response.raise_for_status()
+                            return await response.json()
+                    book_data, ticker_data = await asyncio.gather(get_json(book_url), get_json(ticker_url))
+                    now = time.time()
+                    bids = [(float(p), float(q)) for p, q in book_data.get("bids", []) if float(q) > 0]
+                    asks = [(float(p), float(q)) for p, q in book_data.get("asks", []) if float(q) > 0]
+                    if bids and asks:
+                        self.bitstamp.bids = dict(bids)
+                        self.bitstamp.asks = dict(asks)
+                        self.bitstamp.last_book_ts = now
+                        self.bitstamp.connected = True
+                        self.bitstamp.last_error = None
+                    last = ticker_data.get("last")
+                    if last:
+                        self.bitstamp.last_trade_price = float(last)
+                        self.bitstamp.last_trade_ts = now
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.bitstamp.connected = False
+                self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
+                self.bitstamp.reconnects += 1
+            await asyncio.sleep(2.0)
+
     def get_snapshot(self, now: Optional[float] = None) -> dict:
         now = now or time.time()
-        venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.binance.snapshot(now)]
+        venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.bitstamp.snapshot(now), self.binance.snapshot(now)]
         live = [v for v in venues if v["status"] == "LIVE" and v["mid"] is not None]
         usd_live = [v for v in live if v["quote"] == "USD"]
         prices = [v["mid"] for v in usd_live]
