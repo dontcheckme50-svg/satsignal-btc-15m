@@ -1171,6 +1171,13 @@ def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks
     report_rows = {row["cohort"]: row for row in report["cohorts"]}
     assert report_rows["AGREE_UP"]["vs_baseline_pct_points"] == 50.0
     assert report_rows["DISAGREE"]["vs_baseline_pct_points"] == -50.0
+    assert report["brti_vs_spot"] == {
+        "sample_size": 2,
+        "brti": {"correct": 2, "incorrect": 0, "accuracy_pct": 100.0},
+        "spot": {"correct": 1, "incorrect": 1, "accuracy_pct": 50.0},
+        "brti_minus_spot_pct_points": 50.0,
+        "note": "Paired settled locks only; descriptive comparison, not proof of predictive lift.",
+    }
     assert "not proof of predictive lift" in report["interpretation"]
 
 @pytest.mark.parametrize(
@@ -1227,6 +1234,13 @@ def test_brti_cohort_api_returns_settled_performance(monkeypatch):
     expected_report = {
         "baseline": {"settled": 20, "wins": 12, "losses": 8, "accuracy_pct": 60.0},
         "cohorts": expected,
+        "brti_vs_spot": {
+            "sample_size": 0,
+            "brti": {"correct": 0, "incorrect": 0, "accuracy_pct": None},
+            "spot": {"correct": 0, "incorrect": 0, "accuracy_pct": None},
+            "brti_minus_spot_pct_points": None,
+            "note": "Paired settled locks only; descriptive comparison, not proof of predictive lift.",
+        },
         "interpretation": "Descriptive only; cohort differences are not proof of predictive lift.",
     }
     monkeypatch.setattr(
