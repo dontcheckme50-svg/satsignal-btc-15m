@@ -279,8 +279,14 @@ class MultiExchangeReference:
             count = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("trade_count", 0) for v in venues)
             classified = buy + sell
             delta = buy - sell
+            source_venues = sorted(
+                v.get("venue", "UNKNOWN")
+                for v in venues
+                if v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("classified_volume_btc", 0.0) > 0
+            )
             aggregate["windows"][str(window)] = {
                 "trade_count": count,
+                "source_venues": source_venues,
                 "buy_volume_btc": round(buy, 8),
                 "sell_volume_btc": round(sell, 8),
                 "unknown_volume_btc": round(unknown, 8),
