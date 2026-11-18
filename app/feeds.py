@@ -297,6 +297,14 @@ class MarketDataHub:
                     self.kalshi_status_detail = f"Poller error: {e}"
                 await asyncio.sleep(3.0)
 
+    @staticmethod
+    def _parse_brti_value(value) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) and parsed > 0 else None
+
     async def _brti_poll_loop(self) -> None:
         endpoint = "/trade-api/v2/cfbenchmarks/values"
         url = f"{settings.kalshi_prod_base_url}/cfbenchmarks/values?id=BRTI"
@@ -309,7 +317,11 @@ class MarketDataHub:
                         if resp.status == 200:
                             val = (await resp.json()).get("data", {}).get("payload", {}).get("value")
                             if val is not None:
-                                self.official_brti_price, self.last_brti_ts, self.brti_status, self.brti_detail = float(val), time.time(), "LIVE", "Official CF Benchmarks BRTI"
+                                parsed_value = self._parse_brti_value(val)
+                                if parsed_value is not None:
+                                    self.official_brti_price, self.last_brti_ts, self.brti_status, self.brti_detail = parsed_value, time.time(), "LIVE", "Official CF Benchmarks BRTI"
+                                else:
+                                    self.brti_status, self.brti_detail = "INVALID_DATA", "BRTI payload contained a non-finite or non-positive value"
                         elif resp.status in (401, 403):
                             self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
                             break
