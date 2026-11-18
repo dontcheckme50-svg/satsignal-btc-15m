@@ -17,6 +17,7 @@ class VenueBook:
         self.asks: Dict[float, float] = {}
         self.last_book_ts: float = 0.0
         self.last_trade_ts: float = 0.0
+        self.last_ticker_ts: float = 0.0
         self.last_trade_price: Optional[float] = None
         self.trades = deque(maxlen=50000)
         self.connected = False
@@ -41,9 +42,10 @@ class VenueBook:
             "windows": {},
         }
         max_window = max(windows) if windows else 0
-        recent_max = [trade for trade in self.trades if trade[0] >= now - max_window]
+        # Exclude future-dated records as well as trades outside the rolling window.
+        recent_max = [trade for trade in self.trades if now - max_window <= trade[0] <= now]
         for window in windows:
-            recent = [trade for trade in recent_max if trade[0] >= now - window]
+            recent = [trade for trade in recent_max if now - window <= trade[0] <= now]
             buy_volume = sum(qty for _, _, qty, side in recent if side == "buy")
             sell_volume = sum(qty for _, _, qty, side in recent if side == "sell")
             unknown_volume = sum(qty for _, _, qty, side in recent if side not in ("buy", "sell"))
@@ -70,14 +72,18 @@ class VenueBook:
         asks = sorted(
             ((p, q) for p, q in self.asks.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
         )[:max_levels]
-        age = max(0.0, now - self.last_book_ts) if self.last_book_ts else None
+        raw_age = (now - self.last_book_ts) if self.last_book_ts else None
+        age = raw_age if raw_age is not None and raw_age >= 0 else None
         book_valid = bool(bids and asks and bids[0][0] > 0 and asks[0][0] > 0 and bids[0][1] > 0 and asks[0][1] > 0 and bids[0][0] < asks[0][0])
+        future_timestamp = raw_age is not None and raw_age < -0.5
         if not book_valid or age is None or age > 5.0:
-            invalid_status = "INVALID" if book_valid is False and bids and asks and age is not None and age <= 5.0 else ("STALE" if age is not None else "UNAVAILABLE")
+            invalid_status = "FUTURE_TIMESTAMP" if future_timestamp else ("INVALID" if book_valid is False and bids and asks and age is not None and age <= 5.0 else ("STALE" if age is not None else "UNAVAILABLE"))
             return {
                 "venue": self.name, "quote": self.quote, "status": invalid_status,
                 "age_seconds": round(age, 3) if age is not None else None, "last_trade_price": self.last_trade_price,
-                "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts else None,
+                "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts and now >= self.last_trade_ts else None,
+                "last_ticker_age_seconds": round(now - self.last_ticker_ts, 3) if self.last_ticker_ts and now >= self.last_ticker_ts else None,
+                "connected": self.connected,
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
                 "bid_depth": 0.0, "ask_depth": 0.0, "bid_depth_25bps": 0.0, "ask_depth_25bps": 0.0, "imbalance": None, "levels": 0,
                 "last_error": self.last_error, "reconnects": self.reconnects,
@@ -94,7 +100,9 @@ class VenueBook:
         return {
             "venue": self.name, "quote": self.quote, "status": "LIVE", "age_seconds": round(age, 3),
             "last_trade_price": self.last_trade_price,
-            "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts else None,
+            "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts and now >= self.last_trade_ts else None,
+            "last_ticker_age_seconds": round(now - self.last_ticker_ts, 3) if self.last_ticker_ts and now >= self.last_ticker_ts else None,
+            "connected": self.connected,
             "bid": bid, "ask": ask, "mid": mid, "spread": ask - bid,
             "spread_bps": ((ask - bid) / mid * 10000.0) if mid else None,
             "bid_depth": bid_depth, "ask_depth": ask_depth, "bid_depth_25bps": bid_depth_25bps, "ask_depth_25bps": ask_depth_25bps, "imbalance": imbalance,
@@ -306,8 +314,10 @@ class MultiExchangeReference:
                                 self.bitstamp.last_error = None
                             last = ticker_data.get("last")
                             if last:
+                                # REST ticker polling is not a trade stream. Track ticker freshness
+                                # separately and do not pretend it proves a recent execution.
                                 self.bitstamp.last_trade_price = float(last)
-                                self.bitstamp.last_trade_ts = now
+                                self.bitstamp.last_ticker_ts = now
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
@@ -396,5 +406,5 @@ class MultiExchangeReference:
             "consolidated_bid_depth_usd_within_25bps": total_bid_depth,
             "consolidated_ask_depth_usd_within_25bps": total_ask_depth,
             "consolidated_imbalance": imbalance,
-            "method": "USD venues only: median outlier filter (0.35%), then capped depth-weighted mid-price; shadow-mode estimate, not CF Benchmarks BRTI.",
+            "method": "USD venues only: median outlier filter (0.35%), then capped depth-weighted mid-price; shadow-mode estimate, not CF Benchmarks BRTI. Cross-venue trade-flow volumes are summed observations and may duplicate activity across venues; they are not unique global volume.",
         }
