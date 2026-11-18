@@ -208,6 +208,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Bid Liquidity (±0.25%)</span><span id="mx-bid-depth">--</span></div>
       <div class="kv"><span>Ask Liquidity (±0.25%)</span><span id="mx-ask-depth">--</span></div>
       <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
+      <div class="kv"><span>Cross-Venue Aggressor Delta (15s / 60s)</span><span id="mx-flow-delta">--</span></div>
+      <div class="kv"><span>60s Buy / Sell Volume (BTC)</span><span id="mx-flow-volume">--</span></div>
       <div class="kv"><span>Reference vs Primary Spot</span><span id="mx-primary-diff">--</span></div>
       <div class="kv"><span>Reference vs Official BRTI</span><span id="mx-brti-diff">--</span></div>
       <div class="kv"><span>Reference vs Contract Strike</span><span id="mx-strike-diff">--</span></div>
@@ -304,6 +306,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("mx-bid-depth").textContent = fmtUSD(m.consolidated_bid_depth_usd_within_25bps||0);
       document.getElementById("mx-ask-depth").textContent = fmtUSD(m.consolidated_ask_depth_usd_within_25bps||0);
       document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
+      const flow15 = m.trade_flow?.windows?.["15"];
+      const flow60 = m.trade_flow?.windows?.["60"];
+      const deltaFmt = (v) => v == null ? "--" : (v>0?"+":"")+Number(v).toFixed(4)+" BTC";
+      document.getElementById("mx-flow-delta").textContent = deltaFmt(flow15?.delta_btc)+" / "+deltaFmt(flow60?.delta_btc)+(flow60?.delta_ratio!=null?" ("+(flow60.delta_ratio*100).toFixed(1)+"%)":"");
+      document.getElementById("mx-flow-volume").textContent = flow60 ? Number(flow60.buy_volume_btc||0).toFixed(4)+" / "+Number(flow60.sell_volume_btc||0).toFixed(4) : "--";
       document.getElementById("mx-primary-diff").textContent = m.reference_vs_primary_bps == null ? "--" : (m.reference_vs_primary_bps>0?"+":"")+m.reference_vs_primary_bps.toFixed(2)+" bps";
       document.getElementById("mx-brti-diff").textContent = m.reference_vs_brti_bps == null ? "--" : (m.reference_vs_brti_bps>0?"+":"")+m.reference_vs_brti_bps.toFixed(2)+" bps";
       document.getElementById("mx-strike-diff").textContent = m.reference_vs_strike_bps == null ? "--" : (m.reference_vs_strike_bps>0?"+":"")+m.reference_vs_strike_bps.toFixed(2)+" bps";
