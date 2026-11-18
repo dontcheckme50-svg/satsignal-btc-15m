@@ -226,7 +226,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   </div>
   <div class="card" style="margin-bottom:12px;"><h3>Paper Execution Ledger</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Mode</th><th>Contract</th><th>Side</th><th>Qty</th><th>Entry</th><th>Quote Source</th><th>Fee</th><th>Edge</th><th>Status</th><th>P&L</th></tr></thead><tbody id="trades-body"></tbody></table></div></div>
-  <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
+  <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Record</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
 <script>
   const fmtUSD = (v) => v == null ? "--" : "$" + Number(v).toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
   const sigBadge = (s) => `<span class="badge sig-${s}" style="padding:2px 7px;font-size:.74rem;">${s}</span>`;
@@ -298,7 +298,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("history-body").innerHTML = (d.recent_predictions||[]).map(p => {
       let resText = "PENDING";
       if (p.settled) resText = p.final_won===true ? `<span style="color:var(--up);font-weight:700;">WIN</span>` : (p.final_won===false ? `<span style="color:var(--down);font-weight:700;">LOSS</span>` : `<span style="color:var(--wait);">WAIT (not scored)</span>`);
-      return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
+      return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td><span class="badge">LOCKED</span></td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
     }).join("");
   }
   async function fetchMultiExchange() {
