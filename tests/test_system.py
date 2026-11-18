@@ -1164,3 +1164,62 @@ def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks
         "cohort": "DISAGREE", "settled": 1, "wins": 0, "losses": 1, "accuracy_pct": 0.0
     }
     assert "BRTI_UNAVAILABLE" not in stats
+
+@pytest.mark.parametrize(
+    "brti_mode,expected_cohort",
+    [
+        ("agree", "AGREE_UP"),
+        ("disagree", "DISAGREE"),
+        ("unavailable", "BRTI_UNAVAILABLE"),
+    ],
+)
+def test_official_lock_freezes_brtI_alignment_at_prediction_time(
+    monkeypatch, tmp_path, brti_mode, expected_cohort
+):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(open_timestamp=now - 10.0, close_timestamp=now + 800.0)
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    if brti_mode != "unavailable":
+        hub.brti_status = "LIVE"
+        hub.official_brti_price = 90020.0 if brti_mode == "agree" else 89980.0
+        hub.last_brti_ts = now
+    ledger = PredictionLedger(str(tmp_path / f"brti-lock-{brti_mode}.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    monkeypatch.setattr(
+        orchestrator.final_engine, "decide",
+        lambda *a, **k: _decision(Signal.UP),
+    )
+
+    orchestrator.evaluate_once(now=now, record_to_db=True)
+    orchestrator.evaluate_once(now=now + 1.0, record_to_db=True)
+
+    rows = ledger.get_recent_predictions()
+    assert len(rows) == 1
+    assert rows[0].brti_cohort == expected_cohort
+    assert rows[0].spot_side_at_lock == "UP"
+    assert rows[0].brti_side_at_lock == (
+        "UP" if brti_mode == "agree"
+        else "DOWN" if brti_mode == "disagree"
+        else None
+    )
+
+
+def test_brti_cohort_api_returns_settled_performance(monkeypatch):
+    import app.main as main_module
+
+    expected = [
+        {"cohort": "AGREE_UP", "settled": 8, "wins": 6, "losses": 2, "accuracy_pct": 75.0}
+    ]
+    monkeypatch.setattr(
+        main_module.ledger, "get_brti_cohort_performance", lambda: expected
+    )
+    response = TestClient(main_module.app).get("/api/brti-cohorts")
+    assert response.status_code == 200
+    assert response.json() == {"cohorts": expected}
+
