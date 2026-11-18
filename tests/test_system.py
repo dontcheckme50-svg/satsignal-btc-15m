@@ -134,7 +134,11 @@ def test_kalshi_market_time_and_quote_helpers():
 def test_http_dashboard_and_health_endpoints():
     client = TestClient(app)
     assert client.get("/").status_code == 200
-    assert "SATSIGNAL BTC 15M" in client.get("/").text
+    dashboard = client.get("/").text
+    assert "SATSIGNAL BTC 15M" in dashboard
+    assert 'id="system-health"' in dashboard
+    assert 'id="market-health"' in dashboard
+    assert 'fetchOrchestratorHealth' in dashboard
     assert client.get("/docs").status_code == 200
     health = client.get("/api/health")
     assert health.status_code == 200
