@@ -60,3 +60,16 @@ def test_health_reports_degraded_when_last_success_is_stale():
 
     assert health["health"] == "DEGRADED"
     assert health["has_snapshot"] is True
+
+
+
+def test_health_reports_stopped_when_worker_is_not_running():
+    orchestrator = _health_only_orchestrator()
+    orchestrator._running = False
+    orchestrator.last_cycle_success_ts = time.time()
+    orchestrator.latest_snapshot = object()
+
+    health = orchestrator.get_runtime_health()
+
+    assert health["health"] == "STOPPED"
+    assert health["running"] is False
