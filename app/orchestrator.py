@@ -282,12 +282,30 @@ class PredictorOrchestrator:
                     spot_side_at_lock=spot_side_at_lock,
                 ))
                 self._reset_directional_lock_candidate()
+        # Engine outputs are recomputed from this cycle, but their dashboard
+        # status must also disclose whether the underlying live inputs are usable.
+        # In particular, live_price remains cached during a spot-feed outage;
+        # a recent snapshot timestamp must not make that cached price look fresh.
+        engine_inputs_fresh = bool(
+            spot_age is not None
+            and spot_age <= settings.stale_feed_threshold_sec
+            and book_fresh
+        )
+        engine_input_health = {
+            "contract_ticker": new_contract.ticker,
+            "evaluated_at_ts": ts,
+            "spot_age_seconds": None if spot_age is None else round(spot_age, 3),
+            "book_age_seconds": None if book_age is None else round(book_age, 3),
+            "book_source_matches_spot": book_source_matches,
+            "fresh": engine_inputs_fresh,
+        }
+        engine_block_status = "ACTIVE" if engine_inputs_fresh else "BLOCKED_STALE_INPUT"
         engines_summary = EngineStatusSummary(
-            engine_a_evidence={"status": "ACTIVE", "signal": ev.signal.value, "raw_score": ev.raw_score, "structure": ev.structure_bias},
-            engine_b_weakness={"status": "DEGRADED_FEED" if weakness.feed_degraded else "ACTIVE", "weakness_score": weakness.weakness_score, "flags": weakness.flags},
-            engine_c_regime={"status": "ACTIVE", "regime": regime.regime.value, "min_confidence_required": regime.min_confidence_required, "chop_index": regime.chop_index},
-            engine_d_early={"status": "ACTIVE_WINDOW" if early.active_window else "MONITORING", "signal": early.signal.value, "confidence": early.confidence},
-            engine_e_final={"status": "ACTIVE", "signal": final.signal.value, "confidence": final.confidence, "agreement": final.agreement_status},
+            engine_a_evidence={"status": engine_block_status, "signal": ev.signal.value, "raw_score": ev.raw_score, "structure": ev.structure_bias, "input_health": engine_input_health},
+            engine_b_weakness={"status": "DEGRADED_FEED" if weakness.feed_degraded else "ACTIVE", "weakness_score": weakness.weakness_score, "flags": weakness.flags, "input_health": engine_input_health},
+            engine_c_regime={"status": engine_block_status, "regime": regime.regime.value, "min_confidence_required": regime.min_confidence_required, "chop_index": regime.chop_index, "input_health": engine_input_health},
+            engine_d_early={"status": "BLOCKED_STALE_INPUT" if not engine_inputs_fresh else ("ACTIVE_WINDOW" if early.active_window else "MONITORING"), "signal": early.signal.value, "confidence": early.confidence, "input_health": engine_input_health},
+            engine_e_final={"status": "BLOCKED_STALE_INPUT" if not engine_inputs_fresh else "ACTIVE", "signal": final.signal.value, "confidence": final.confidence, "agreement": final.agreement_status, "input_health": engine_input_health},
         )
         self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
         return self.latest_snapshot
