@@ -18,3 +18,12 @@ def test_multi_exchange_shadow_endpoint():
     assert "60" in payload["trade_flow"]["windows"]
     assert "180" in payload["trade_flow"]["windows"]
     assert "not CF Benchmarks BRTI" in payload["method"]
+
+
+
+def test_history_api_limits_are_bounded():
+    client = TestClient(app)
+
+    assert client.get("/api/multi-exchange/history?limit=1001").status_code == 422
+    assert client.get("/api/history?limit=501").status_code == 422
+    assert client.get("/api/trades?limit=201").status_code == 422
