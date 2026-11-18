@@ -88,6 +88,12 @@ class PredictorOrchestrator:
         self.active_contract = new_contract
         spot_age = round(ts - self.hub.last_spot_ts, 2) if self.hub.last_spot_ts else None
         multi_reference = self.hub.get_multi_exchange_snapshot()
+        multi_reference["strike_price"] = new_contract.strike_price
+        reference_price = multi_reference.get("reference_price")
+        multi_reference["reference_vs_strike_bps"] = (
+            round((float(reference_price) - float(new_contract.strike_price)) / float(new_contract.strike_price) * 10000.0, 4)
+            if reference_price is not None and new_contract.strike_price > 0 else None
+        )
         if record_to_db and ts - self.last_multi_exchange_logged_ts >= 5.0:
             try:
                 self.ledger.record_multi_exchange_reference(
