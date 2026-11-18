@@ -432,6 +432,33 @@ def test_evidence_engine_excludes_stale_bars_from_short_horizon_signals():
     assert with_stale_history.structure_bias == baseline.structure_bias
 
 
+def test_sparse_trade_bars_are_resampled_by_elapsed_time_not_observation_count():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 150.0, seconds_remaining=750.0)
+
+    def price_at(second):
+        step = int((second - (now - 120.0)) // 10)
+        return 90000.0 + step * 2.0
+
+    sparse_bars = [
+        (int(second), price_at(second), 1.0)
+        for second in range(int(now - 120), int(now), 10)
+    ]
+    dense_bars = [
+        (int(second), price_at(second), 1.0)
+        for second in range(int(now - 120), int(now))
+    ]
+
+    engine = EvidenceEngine()
+    sparse = engine.analyze(now, 90024.0, contract, [], sparse_bars, [], [])
+    dense = engine.analyze(now, 90024.0, contract, [], dense_bars, [], [])
+
+    assert sparse.momentum_score == dense.momentum_score
+    assert sparse.rsi_14 == dense.rsi_14
+    assert sparse.volatility_annualized == dense.volatility_annualized
+    assert sparse.structure_bias == dense.structure_bias
+
+
 def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     now = 1_000_000.0
     contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
