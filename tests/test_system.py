@@ -278,6 +278,50 @@ def test_fresh_official_brti_contributes_independent_strike_evidence():
     assert evidence.brti_conflict is False
 
 
+def test_final_decision_uses_blended_official_brti_strike_evidence():
+    from scipy.stats import norm
+    from app.engines import FinalDecisionEngine
+    from app.models import EarlyPredictionReport, WeaknessReport
+
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    evidence = EvidenceEngine().analyze(
+        now, 90010.0, contract, [], [], [], [],
+        official_brti_price=90030.0, official_brti_age_sec=0.5,
+    )
+    spot_z = EvidenceEngine._strike_z_score(
+        90010.0, contract.strike_price,
+        contract.seconds_remaining, evidence.volatility_annualized,
+    )
+    brti_z = EvidenceEngine._strike_z_score(
+        90030.0, contract.strike_price,
+        contract.seconds_remaining, evidence.volatility_annualized,
+    )
+    expected_blended_z = 0.65 * spot_z + 0.35 * brti_z
+    assert evidence.strike_z_score == pytest.approx(expected_blended_z, abs=1e-6)
+
+    weakness = WeaknessReport(weakness_score=0.0)
+    regime = RegimeReport(
+        regime=MarketRegime.STABLE,
+        volatility_percentile=0.0,
+        chop_index=0.0,
+        min_confidence_required=0.0,
+        explanation="test",
+    )
+    early = EarlyPredictionReport(
+        active_window=False, signal=Signal.WAIT, confidence=50.0,
+        up_prob=0.5, down_prob=0.5, rationale="test",
+    )
+    final = FinalDecisionEngine().decide(
+        evidence, weakness, regime, early, contract,
+        {"evidence": 1.0, "early": 1.0},
+    )
+    micro_drift_z = (evidence.raw_score / 100.0) * 0.40
+    expected_probability = round(float(norm.cdf(expected_blended_z + micro_drift_z)), 4)
+
+    assert final.up_probability == expected_probability
+
+
 def test_brti_spot_strike_conflict_is_flagged_as_weakness():
     now = 1_000_000.0
     contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
