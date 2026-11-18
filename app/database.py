@@ -1,4 +1,4 @@
-import sqlite3
+import sqlite3, json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -72,13 +72,82 @@ class PredictionLedger:
                     notes TEXT NOT NULL DEFAULT '',
                     settled_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS multi_exchange_reference (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    epoch_ts REAL NOT NULL,
+                    contract_ticker TEXT NOT NULL,
+                    strike_price REAL,
+                    primary_spot_price REAL,
+                    official_brti_price REAL,
+                    reference_price REAL,
+                    reference_status TEXT NOT NULL,
+                    usd_venue_count INTEGER NOT NULL DEFAULT 0,
+                    included_venues_json TEXT NOT NULL DEFAULT '[]',
+                    outlier_venues_json TEXT NOT NULL DEFAULT '[]',
+                    venues_json TEXT NOT NULL DEFAULT '[]',
+                    bid_depth_25bps REAL,
+                    ask_depth_25bps REAL,
+                    imbalance REAL,
+                    ref_vs_primary_bps REAL,
+                    ref_vs_brti_bps REAL,
+                    primary_vs_brti_bps REAL
+                );
                 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_pred_settled ON predictions(settled);
-                CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(contract_ticker);
+                CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(contract_ticker);\n                CREATE INDEX IF NOT EXISTS idx_multi_ref_epoch ON multi_exchange_reference(epoch_ts);\n                CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
             """)
             trade_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
             if "settled_at" not in trade_columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN settled_at TEXT")
+
+
+    def record_multi_exchange_reference(self, epoch_ts: float, contract_ticker: str, strike_price: Optional[float], primary_spot_price: Optional[float], official_brti_price: Optional[float], snapshot: dict) -> int:
+        reference_price = snapshot.get("reference_price")
+        def bps(a, b):
+            return round((float(a) - float(b)) / float(b) * 10000.0, 4) if a is not None and b is not None and float(b) > 0 else None
+        venue_details = [
+            {
+                "venue": v.get("venue"), "quote": v.get("quote"), "status": v.get("status"),
+                "mid": v.get("mid"), "spread_bps": v.get("spread_bps"),
+                "imbalance": v.get("imbalance"), "bid_depth_25bps": v.get("bid_depth_25bps"),
+                "ask_depth_25bps": v.get("ask_depth_25bps"), "age_seconds": v.get("age_seconds"),
+            }
+            for v in snapshot.get("venues", [])
+        ]
+        with self._connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO multi_exchange_reference (
+                    epoch_ts, contract_ticker, strike_price, primary_spot_price, official_brti_price,
+                    reference_price, reference_status, usd_venue_count, included_venues_json,
+                    outlier_venues_json, venues_json, bid_depth_25bps, ask_depth_25bps, imbalance,
+                    ref_vs_primary_bps, ref_vs_brti_bps, primary_vs_brti_bps
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    epoch_ts, contract_ticker, strike_price, primary_spot_price, official_brti_price,
+                    reference_price, snapshot.get("status", "UNAVAILABLE"), int(snapshot.get("usd_venue_count_live", 0)),
+                    json.dumps(snapshot.get("included_venues", [])), json.dumps(snapshot.get("outlier_venues", [])),
+                    json.dumps(venue_details), snapshot.get("consolidated_bid_depth_usd_within_25bps"),
+                    snapshot.get("consolidated_ask_depth_usd_within_25bps"), snapshot.get("consolidated_imbalance"),
+                    bps(reference_price, primary_spot_price), bps(reference_price, official_brti_price),
+                    bps(primary_spot_price, official_brti_price),
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def get_multi_exchange_reference_history(self, limit: int = 200) -> List[dict]:
+        limit = max(1, min(int(limit), 5000))
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM multi_exchange_reference ORDER BY epoch_ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["included_venues"] = json.loads(item.pop("included_venues_json") or "[]")
+            item["outlier_venues"] = json.loads(item.pop("outlier_venues_json") or "[]")
+            item["venues"] = json.loads(item.pop("venues_json") or "[]")
+            result.append(item)
+        return result
 
     def record_prediction(self, rec: PredictionRecord) -> int:
         with self._connection() as conn:
