@@ -1,4 +1,5 @@
 import time
+import pytest
 
 import app.multi_exchange as multi_exchange_module
 from app.multi_exchange import MultiExchangeReference, VenueBook
@@ -158,3 +159,32 @@ def test_coinbase_maker_side_is_inverted_to_aggressor_side():
     assert reference._coinbase_aggressor_side("buy") == "sell"
     assert reference._coinbase_aggressor_side("sell") == "buy"
     assert reference._coinbase_aggressor_side(None) == "unknown"
+
+
+
+def test_binance_aggressor_side_from_aggtrade_maker_flag():
+    reference = MultiExchangeReference()
+
+    assert reference._binance_aggressor_side(True) == "sell"
+    assert reference._binance_aggressor_side(False) == "buy"
+    assert reference._binance_aggressor_side(None) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_binance_is_started_as_independent_shadow_worker(monkeypatch):
+    reference = MultiExchangeReference()
+    created = []
+
+    async def fake_worker():
+        return None
+
+    monkeypatch.setattr(reference, "_binance_loop", fake_worker)
+    monkeypatch.setattr(reference, "_coinbase_loop", fake_worker)
+    monkeypatch.setattr(reference, "_kraken_loop", fake_worker)
+    monkeypatch.setattr(reference, "_bitstamp_poll_loop", fake_worker)
+
+    await reference.start()
+    names = {task.get_name() for task in reference._tasks}
+    assert "multi-binance" in names
+    assert len(reference._tasks) == 4
+    await reference.stop()
