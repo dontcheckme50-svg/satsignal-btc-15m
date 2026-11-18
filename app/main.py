@@ -305,7 +305,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       statusEl.style.color = m.status === "LIVE" ? "var(--up)" : "var(--wait)";
       document.getElementById("mx-price").textContent = m.reference_price != null ? fmtUSD(m.reference_price) : "Waiting for 2 USD venues";
       document.getElementById("mx-venues").textContent = `${(m.included_venues||[]).join(", ")||"--"} (${m.usd_venue_count_live||0}/2 USD feeds)`;
-      document.getElementById("mx-venue-health").textContent = (m.venues||[]).map(v => `${v.venue}: ${v.status}${v.connected ? " [socket]" : ""}${v.age_seconds!=null ? " "+Number(v.age_seconds).toFixed(1)+"s" : ""}`).join(" | ") || "--";
+      document.getElementById("mx-venue-health").textContent = (m.venues||[]).map(v => `${v.venue}: ${v.status}${v.connected ? " [connected]" : ""}${v.age_seconds!=null ? " "+Number(v.age_seconds).toFixed(1)+"s" : ""}`).join(" | ") || "--";
       document.getElementById("mx-bid-depth").textContent = fmtUSD(m.consolidated_bid_depth_usd_within_25bps||0);
       document.getElementById("mx-ask-depth").textContent = fmtUSD(m.consolidated_ask_depth_usd_within_25bps||0);
       document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
