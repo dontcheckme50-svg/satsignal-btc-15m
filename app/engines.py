@@ -34,8 +34,9 @@ class EvidenceEngine:
         large_bids = sum(q for _, q in bids[:10] if med_sz > 0 and q >= 2.5 * med_sz)
         large_asks = sum(q for _, q in asks[:10] if med_sz > 0 and q >= 2.5 * med_sz)
         large_bias = (large_bids - large_asks) / (large_bids + large_asks) if (large_bids + large_asks) > 0 else 0.0
-        # Exclude future-dated bars from momentum/volatility calculations.
-        valid_bars = [b for b in bars_1s if b[0] <= now]
+        # Only recent, source-observed bars may influence short-horizon signals.
+        # A fresh spot tick must not make an old candle history look current.
+        valid_bars = [b for b in bars_1s if now - 300.0 <= b[0] <= now]
         prices = [b[1] for b in valid_bars[-300:]] + [live_price]
         rsi_14 = self._compute_rsi(prices[-60:], period=14)
         ann_vol = self._compute_annualized_vol(prices)
