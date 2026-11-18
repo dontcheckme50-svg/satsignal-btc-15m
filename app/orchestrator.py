@@ -138,7 +138,9 @@ class PredictorOrchestrator:
                 self.last_multi_exchange_logged_ts = ts
             except Exception:
                 logger.exception("Failed to persist multi-exchange shadow observation")
-        observed_bars = [bar for bar in self.hub.bars_1s if bar[0] <= ts]
+        # Bound bar history by age as well as timestamp; old candles must not
+        # leak into momentum, volatility, or regime calculations after feed gaps.
+        observed_bars = [bar for bar in self.hub.bars_1s if ts - 300.0 <= bar[0] <= ts]
         brti_age = safe_age_seconds(self.hub.last_brti_ts, ts)
         brti_is_fresh = (
             self.hub.brti_status == "LIVE"
