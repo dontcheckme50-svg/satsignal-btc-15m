@@ -322,3 +322,35 @@ async def test_clean_websocket_close_marks_venue_disconnected_and_backoffs(monke
     assert venue.connected is False
     assert venue.reconnects == 1
     assert "closed cleanly" in venue.last_error
+
+
+
+def test_shadow_trade_ingestion_rejects_nonfinite_and_invalid_values():
+    venue = VenueBook("TEST", "USD")
+    now = time.time()
+
+    assert venue.ingest_trade(now, 100.0, 0.5, "buy") is True
+    baseline = (len(venue.trades), venue.last_trade_price, venue.last_trade_ts)
+    assert venue.ingest_trade(now, float("inf"), 0.5, "buy") is False
+    assert venue.ingest_trade(now, 100.0, float("nan"), "sell") is False
+    assert venue.ingest_trade(now + 5.0, 100.0, 1.0, "buy") is False
+    assert venue.ingest_trade(now, 0.0, 1.0, "buy") is False
+
+    assert (len(venue.trades), venue.last_trade_price, venue.last_trade_ts) == baseline
+
+
+def test_trade_flow_snapshot_ignores_malformed_records():
+    venue = VenueBook("TEST", "USD")
+    now = 1000.0
+    venue.trades.extend([
+        (995.0, 100.0, 0.5, "buy"),
+        (996.0, 100.0, float("inf"), "sell"),
+        ("bad", 100.0, 1.0, "buy"),
+        (1001.0, 100.0, 10.0, "sell"),
+    ])
+
+    flow = venue.trade_flow_snapshot(now)
+
+    assert flow["windows"]["15"]["buy_volume_btc"] == 0.5
+    assert flow["windows"]["15"]["sell_volume_btc"] == 0.0
+    assert flow["windows"]["15"]["trade_count"] == 1
