@@ -62,9 +62,11 @@ class VenueBook:
         bids = sorted(self.bids.items(), reverse=True)[:max_levels]
         asks = sorted(self.asks.items())[:max_levels]
         age = max(0.0, now - self.last_book_ts) if self.last_book_ts else None
-        if not bids or not asks or age is None or age > 5.0:
+        book_valid = bool(bids and asks and bids[0][0] > 0 and asks[0][0] > 0 and bids[0][1] > 0 and asks[0][1] > 0 and bids[0][0] < asks[0][0])
+        if not book_valid or age is None or age > 5.0:
+            invalid_status = "INVALID" if book_valid is False and bids and asks and age is not None and age <= 5.0 else ("STALE" if age is not None else "UNAVAILABLE")
             return {
-                "venue": self.name, "quote": self.quote, "status": "STALE" if age is not None else "UNAVAILABLE",
+                "venue": self.name, "quote": self.quote, "status": invalid_status,
                 "age_seconds": round(age, 3) if age is not None else None, "last_trade_price": self.last_trade_price,
                 "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts else None,
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
@@ -355,6 +357,13 @@ class MultiExchangeReference:
             sorted_prices = sorted(prices)
             median = sorted_prices[len(sorted_prices) // 2] if len(sorted_prices) % 2 else sum(sorted_prices[len(sorted_prices)//2-1:len(sorted_prices)//2+1]) / 2
             accepted = [v for v in usd_live if abs(v["mid"] - median) / median <= 0.0035]
+            # Prevent two venues from both passing a median filter while still
+            # disagreeing with each other beyond the intended consensus tolerance.
+            if len(accepted) >= 2:
+                accepted_prices = [v["mid"] for v in accepted]
+                pairwise_spread = (max(accepted_prices) - min(accepted_prices)) / median
+                if pairwise_spread > 0.0035:
+                    accepted = []
             excluded = [v["venue"] for v in usd_live if v not in accepted]
             weights = [max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0)) for v in accepted]
             if len(accepted) >= 2:
