@@ -143,6 +143,8 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
     snapshot = orchestrator.evaluate_once(now=now, record_to_db=True)
     assert snapshot is not None
     assert snapshot.contract.is_official_kalshi is False
+    assert snapshot.final.signal == Signal.WAIT
+    assert "official Kalshi contract" in snapshot.final.rationale
     assert ledger.get_recent_predictions() == []
     shadow_rows = ledger.get_multi_exchange_reference_history(limit=5)
     assert len(shadow_rows) == 1
