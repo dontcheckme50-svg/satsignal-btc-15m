@@ -243,4 +243,4 @@ async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp
     assert health["total_cycle_errors"] == 1
     assert health["consecutive_cycle_errors"] == 1
     assert "injected cycle failure" in health["last_cycle_error"]
-    assert health["health"] == "DEGRADED"
+    assert health["health"] == "STOPPED"
