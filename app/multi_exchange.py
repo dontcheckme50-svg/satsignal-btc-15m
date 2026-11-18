@@ -204,6 +204,8 @@ class MultiExchangeReference:
         imbalance = (total_bid_depth - total_ask_depth) / (total_bid_depth + total_ask_depth) if total_bid_depth + total_ask_depth else None
         return {
             "timestamp": now,
+            "reference_age_seconds": max((v["age_seconds"] for v in accepted), default=None),
+            "reference_timestamp": now - max((v["age_seconds"] for v in accepted), default=0.0) if accepted else None,
             "status": "LIVE" if len(accepted) >= 2 and composite is not None else ("PARTIAL" if usd_live else "UNAVAILABLE"),
             "reference_price": composite,
             "venue_count_live": len(live),
