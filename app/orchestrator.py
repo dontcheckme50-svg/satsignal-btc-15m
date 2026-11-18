@@ -36,6 +36,7 @@ class PredictorOrchestrator:
         self.total_cycle_errors: int = 0
         self.last_execution_error: Optional[str] = None
         self.last_settlement_error: Optional[str] = None
+        self._settlement_task: Optional[asyncio.Task] = None
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -142,6 +143,24 @@ class PredictorOrchestrator:
         self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
         return self.latest_snapshot
 
+    async def _settlement_worker(self, current_ticker: str, fallback_price: float) -> None:
+        try:
+            await self.reconcile_unsettled_contracts(current_ticker, fallback_price)
+            self.last_settlement_error = None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_settlement_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("Background settlement reconciliation failed")
+
+    async def shutdown_background_tasks(self) -> None:
+        task = self._settlement_task
+        if task is not None and not task.done():
+            task.cancel()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        self._settlement_task = None
+
     def get_runtime_health(self) -> dict:
         now = time.time()
         cycle_age = None if self.last_cycle_success_ts is None else round(now - self.last_cycle_success_ts, 2)
@@ -171,6 +190,7 @@ class PredictorOrchestrator:
             "total_cycle_errors": self.total_cycle_errors,
             "last_execution_error": self.last_execution_error,
             "last_settlement_error": self.last_settlement_error,
+            "settlement_reconciliation_running": bool(self._settlement_task is not None and not self._settlement_task.done()),
             "health": health,
         }
 
@@ -213,12 +233,11 @@ class PredictorOrchestrator:
                 reconcile_counter += 1
                 if reconcile_counter >= 10:
                     reconcile_counter = 0
-                    try:
-                        await self.reconcile_unsettled_contracts(snap.contract.ticker, snap.evidence.live_price)
-                        self.last_settlement_error = None
-                    except Exception as exc:
-                        self.last_settlement_error = f"{type(exc).__name__}: {exc}"
-                        logger.exception("Settlement reconciliation failed; prediction worker continues")
+                    if self._settlement_task is None or self._settlement_task.done():
+                        self._settlement_task = asyncio.create_task(
+                            self._settlement_worker(snap.contract.ticker, snap.evidence.live_price),
+                            name="settlement-reconciliation",
+                        )
                 try:
                     snap.scoreboard = self.ledger.get_scoreboard()
                     snap.recent_predictions = self.ledger.get_recent_predictions(limit=20)
@@ -234,3 +253,5 @@ class PredictorOrchestrator:
 
     def stop(self) -> None:
         self._running = False
+        if self._settlement_task is not None and not self._settlement_task.done():
+            self._settlement_task.cancel()
