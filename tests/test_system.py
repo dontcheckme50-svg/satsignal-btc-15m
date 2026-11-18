@@ -434,3 +434,19 @@ def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch, tmp_
 
     assert captured["bars"]
     assert all(bar[0] <= now for bar in captured["bars"])
+
+
+
+def test_future_kalshi_timestamp_cannot_authorize_official_contract():
+    from app.orchestrator import PredictorOrchestrator
+
+    hub = MarketDataHub()
+    now = time.time()
+    hub.kalshi_contract = _contract(open_timestamp=now - 100.0, close_timestamp=now + 800.0)
+    hub.last_kalshi_ts = now + 5.0
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger(":memory:"))
+
+    resolved = orchestrator._resolve_active_contract(now, 90000.0)
+
+    assert resolved.is_official_kalshi is False
+    assert resolved.ticker.startswith("SYNTH-BTC15M-")
