@@ -22,9 +22,8 @@ class EvidenceEngine:
         # sample must not be divided by a full ten minutes and create a false
         # volume-spike signal.
         if trades_10m:
-            observed_seconds = min(600.0, max(60.0, now - min(t[0] for t in trades_10m)))
-            observed_minutes = observed_seconds / 60.0
-            avg_1m_vol = sum(t[2] for t in trades_10m) / observed_minutes
+            observed_seconds = min(600.0, now - min(t[0] for t in trades_10m))
+            avg_1m_vol = (sum(t[2] for t in trades_10m) / (observed_seconds / 60.0)) if observed_seconds >= 60.0 else 0.0
         else:
             avg_1m_vol = 0.0
         vol_ratio = round(tot_vol_60s / avg_1m_vol, 2) if avg_1m_vol > 1e-6 else 1.0
