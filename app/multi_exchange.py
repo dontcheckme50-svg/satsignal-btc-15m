@@ -184,35 +184,49 @@ class MultiExchangeReference:
     async def _bitstamp_poll_loop(self):
         book_url = "https://www.bitstamp.net/api/v2/order_book/btcusd/?group=1"
         ticker_url = "https://www.bitstamp.net/api/v2/ticker/btcusd/"
-        timeout = aiohttp.ClientTimeout(total=4)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            while self._running:
-                try:
-                    async def get_json(url):
-                        async with session.get(url) as response:
-                            response.raise_for_status()
-                            return await response.json()
-                    book_data, ticker_data = await asyncio.gather(get_json(book_url), get_json(ticker_url))
-                    now = time.time()
-                    bids = [(float(p), float(q)) for p, q in book_data.get("bids", []) if float(q) > 0]
-                    asks = [(float(p), float(q)) for p, q in book_data.get("asks", []) if float(q) > 0]
-                    if bids and asks:
-                        self.bitstamp.bids = dict(bids)
-                        self.bitstamp.asks = dict(asks)
-                        self.bitstamp.last_book_ts = now
-                        self.bitstamp.connected = True
-                        self.bitstamp.last_error = None
-                    last = ticker_data.get("last")
-                    if last:
-                        self.bitstamp.last_trade_price = float(last)
-                        self.bitstamp.last_trade_ts = now
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    self.bitstamp.connected = False
-                    self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
-                    self.bitstamp.reconnects += 1
-                await asyncio.sleep(2.0)
+        while self._running:
+            try:
+                timeout = aiohttp.ClientTimeout(total=4)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    while self._running:
+                        try:
+                            async def get_json(url):
+                                async with session.get(url) as response:
+                                    response.raise_for_status()
+                                    return await response.json()
+
+                            book_data, ticker_data = await asyncio.gather(
+                                get_json(book_url), get_json(ticker_url)
+                            )
+                            now = time.time()
+                            bids = [(float(p), float(q)) for p, q in book_data.get("bids", []) if float(q) > 0]
+                            asks = [(float(p), float(q)) for p, q in book_data.get("asks", []) if float(q) > 0]
+                            if bids and asks:
+                                self.bitstamp.bids = dict(bids)
+                                self.bitstamp.asks = dict(asks)
+                                self.bitstamp.last_book_ts = now
+                                self.bitstamp.connected = True
+                                self.bitstamp.last_error = None
+                            last = ticker_data.get("last")
+                            if last:
+                                self.bitstamp.last_trade_price = float(last)
+                                self.bitstamp.last_trade_ts = now
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            self.bitstamp.connected = False
+                            self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
+                            self.bitstamp.reconnects += 1
+                        await asyncio.sleep(2.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Session creation/teardown errors are also recoverable; keep the
+                # venue worker alive instead of silently losing Bitstamp forever.
+                self.bitstamp.connected = False
+                self.bitstamp.last_error = f"{type(exc).__name__}: {exc}"
+                self.bitstamp.reconnects += 1
+                await asyncio.sleep(1.5)
 
     def get_snapshot(self, now: Optional[float] = None) -> dict:
         now = now or time.time()
