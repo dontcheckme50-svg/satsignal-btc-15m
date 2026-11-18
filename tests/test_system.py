@@ -844,6 +844,39 @@ def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
 
 
 
+@pytest.mark.asyncio
+async def test_spot_stream_retries_binance_after_coinbase_fallback(monkeypatch):
+    hub = MarketDataHub()
+    hub._running = True
+    clock = 0.0
+    attempts = []
+
+    async def fake_binance():
+        attempts.append("binance")
+        if attempts.count("binance") == 1:
+            raise RuntimeError("temporary primary feed outage")
+        hub._running = False
+
+    async def fake_coinbase():
+        attempts.append("coinbase")
+
+    async def fake_sleep(seconds):
+        nonlocal clock
+        clock += seconds
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "_run_binance_ws", fake_binance)
+    monkeypatch.setattr(hub, "_run_coinbase_ws", fake_coinbase)
+
+    await hub._spot_stream_loop()
+
+    assert attempts[0] == "binance"
+    assert "coinbase" in attempts
+    assert attempts[-1] == "binance"
+    assert attempts.count("binance") == 2
+
+
 def test_fallback_source_can_recover_when_exchange_clock_is_behind():
     hub = MarketDataHub()
     now = time.time()
