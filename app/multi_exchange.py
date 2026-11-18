@@ -354,7 +354,7 @@ class MultiExchangeReference:
         return aggregate
 
     def get_snapshot(self, now: Optional[float] = None) -> dict:
-        now = now or time.time()
+        now = time.time() if now is None else now
         venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.bitstamp.snapshot(now), self.binance.snapshot(now)]
         live = [v for v in venues if v["status"] == "LIVE" and v["mid"] is not None]
         usd_live = [v for v in live if v["quote"] == "USD"]
