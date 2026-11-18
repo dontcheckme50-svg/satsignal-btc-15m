@@ -272,6 +272,7 @@ class MarketDataHub:
             else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
         )
         brti_age = round(now - self.last_brti_ts, 2) if self.last_brti_ts else None
+        brti_display_status = "STALE" if brti_age is not None and brti_age > settings.stale_feed_threshold_sec else self.brti_status
         multi = self.get_multi_exchange_snapshot()
         venue_statuses = []
         for venue in multi.get("venues", []):
@@ -292,5 +293,5 @@ class MarketDataHub:
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts else None, age_seconds=spot_age, detail=self.active_spot_source),
             FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels"),
             FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts else None, age_seconds=kalshi_age, detail=self.kalshi_status_detail),
-            FeedStatus(name="CF Benchmarks BRTI", status=self.brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
+            FeedStatus(name="CF Benchmarks BRTI", status=brti_display_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
         ] + venue_statuses
