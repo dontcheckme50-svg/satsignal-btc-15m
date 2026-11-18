@@ -19,7 +19,7 @@ C. Regime: stable, shaky or high-risk reversal regime.
 D. Early: opening-window probability estimate.
 E. Final: combines evidence, weakness, regime and early-engine agreement into UP/DOWN/WAIT.
 
-The dashboard redesign changes presentation and reporting; it does not change the five engines' scoring formulas.
+The five-engine architecture is preserved. Reliability work hardens evidence inputs and gates: stale/missing order books degrade the forecast, short startup history is neutral for volume ratio, and a synthetic contract cannot produce an actionable final verdict.
 
 ## Local run (Windows PowerShell)
 
@@ -61,6 +61,17 @@ The shadow feed does not affect predictions or execution. It is visible on the d
 - `/api/multi-exchange` — current venue/reference snapshot and comparison versus primary spot, official BRTI (when fresh), and strike.
 - `/api/multi-exchange/history` — persisted observations.
 - Shadow observations are recorded to SQLite every five seconds while the orchestrator is evaluating and a primary spot price is available. Source ages are stored; stale spot/BRTI values are excluded from comparisons.
+
+## Reliability safeguards
+
+- Primary trades/books reject malformed, non-finite, crossed, future-dated and out-of-order data; source switching can recover across small exchange-clock offsets.
+- Primary feeds use exchange event timestamps when available. Closed one-second bars use the actual final trade price from that second.
+- Stale order-book depth is excluded from evidence and forces a degraded WAIT state.
+- Official contract selection requires a fresh, non-future Kalshi poll. Synthetic contracts remain non-actionable.
+- Paper execution independently rechecks contract time, spot-feed freshness, Kalshi quote freshness, ticker identity, probability validity and one-entry-per-contract.
+- Synthetic contracts are never graded using a later contract's fallback price.
+- Official settlement reconciliation runs separately from the prediction loop, processes a bounded oldest-first batch with limited concurrency, and is cancelled cleanly at shutdown.
+- Shadow trade flow rejects malformed/non-finite trades and does not duplicate primary Binance data into its independent comparison venue.
 
 ## Tests
 
