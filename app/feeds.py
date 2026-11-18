@@ -75,7 +75,7 @@ class MarketDataHub:
         now = time.time()
         if not all(math.isfinite(v) for v in (ts, price, qty)) or ts <= 0 or price <= 0 or qty <= 0:
             return
-        if ts > now + 0.5 or ts < self.last_spot_ts - 1.0:
+        if ts > now + 0.5 or ts < self.last_spot_ts:
             return
         if not isinstance(is_buyer_maker, bool) or not isinstance(source, str) or not source.strip():
             return
@@ -100,9 +100,9 @@ class MarketDataHub:
             ts = float(ts)
             clean_bids = [(float(p), float(q)) for p, q in bids if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
             clean_asks = [(float(p), float(q)) for p, q in asks if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, IndexError):
             return
-        if not math.isfinite(ts) or ts <= 0 or ts > time.time() + 0.5 or ts < self.last_book_ts - 1.0:
+        if not math.isfinite(ts) or ts <= 0 or ts > time.time() + 0.5 or ts < self.last_book_ts:
             return
         clean_bids = sorted(clean_bids, key=lambda x: x[0], reverse=True)[:20]
         clean_asks = sorted(clean_asks, key=lambda x: x[0])[:20]
