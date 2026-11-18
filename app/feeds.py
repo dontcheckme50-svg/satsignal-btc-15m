@@ -411,7 +411,16 @@ class MarketDataHub:
         spot_age = safe_age_seconds(self.last_spot_ts, now)
         spot_status = "FUTURE_TIMESTAMP" if self.last_spot_ts and spot_age is None else ("UNAVAILABLE" if spot_age is None else ("STALE" if spot_age > settings.stale_feed_threshold_sec else ("LIVE" if self.active_spot_source == "BINANCE_SPOT" else "FALLBACK")))
         book_age = safe_age_seconds(self.last_book_ts, now)
-        book_status = "FUTURE_TIMESTAMP" if self.last_book_ts and book_age is None else ("LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE"))
+        book_source_matches = bool(
+            self.active_spot_source
+            and self.last_book_source == self.active_spot_source
+        )
+        book_status = (
+            "FUTURE_TIMESTAMP" if self.last_book_ts and book_age is None
+            else ("SOURCE_MISMATCH" if book_age is not None and book_age <= settings.stale_feed_threshold_sec and not book_source_matches
+            else ("LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec)
+            else ("STALE" if book_age is not None else "UNAVAILABLE")))
+        )
         kalshi_age = safe_age_seconds(self.last_kalshi_ts, now)
         kalshi_status = (
             "FUTURE_TIMESTAMP" if self.last_kalshi_ts and kalshi_age is None
@@ -446,7 +455,7 @@ class MarketDataHub:
         ))
         return [
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts else None, age_seconds=spot_age, detail=self.active_spot_source),
-            FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels"),
+            FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels | source={self.last_book_source} | active spot={self.active_spot_source}"),
             FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts else None, age_seconds=kalshi_age, detail=self.kalshi_status_detail),
             FeedStatus(name="CF Benchmarks BRTI", status=brti_display_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
         ] + venue_statuses
