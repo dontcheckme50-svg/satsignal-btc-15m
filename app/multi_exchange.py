@@ -101,7 +101,7 @@ class MultiExchangeReference:
 
     async def _coinbase_loop(self):
         url = "wss://ws-feed.exchange.coinbase.com"
-        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "market_trades"]}
+        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "matches"]}
         while self._running:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
@@ -122,12 +122,11 @@ class MultiExchangeReference:
                             for side, price, qty in msg.get("changes", []):
                                 self.coinbase.update_level(side, float(price), float(qty))
                             self.coinbase.last_book_ts = now
-                        elif typ == "market_trades":
-                            for event in msg.get("events", []):
-                                for trade in event.get("trades", []):
-                                    p, q = float(trade["price"]), float(trade["size"])
-                                    self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
-                                    self.coinbase.trades.append((now, p, q, str(trade.get("side", "")).lower()))
+                        elif typ == "match" and msg.get("product_id") == "BTC-USD":
+                            p, q = float(msg["price"]), float(msg["size"])
+                            self.coinbase.last_trade_price, self.coinbase.last_trade_ts = p, now
+                            # Coinbase Exchange "side" is maker-side; retain raw side only.
+                            self.coinbase.trades.append((now, p, q, str(msg.get("side", "")).lower()))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
