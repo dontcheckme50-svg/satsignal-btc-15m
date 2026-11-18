@@ -77,7 +77,9 @@ class PredictorOrchestrator:
             cp_rem = float(settings.checkpoint_interval_sec)
         return ContractInfo(ticker=ticker, strike_price=strike, strike_source="SYNTHETIC_OPEN_PROXY", open_timestamp=window_open, close_timestamp=window_close, seconds_remaining=rem, checkpoint_seconds_remaining=cp_rem, is_official_kalshi=False)
 
-    async def reconcile_unsettled_contracts(self, current_ticker: str, fallback_price: float) -> None:
+    async def reconcile_unsettled_contracts(self, current_ticker: str, fallback_price: Optional[float] = None) -> None:
+        # fallback_price is retained for call compatibility only. A later live spot
+        # price must never be attributed to an already-closed contract.
         # Keep reconciliation bounded so a historical backlog cannot stall the
         # prediction loop for dozens of sequential HTTP timeouts.
         pending = [ticker for ticker in self.ledger.get_unsettled_contract_tickers() if ticker != current_ticker][:5]
@@ -97,7 +99,7 @@ class PredictorOrchestrator:
                 outcome, exp_val = verified
                 self.ledger.settle_contract(
                     old_ticker,
-                    settlement_price=(exp_val if exp_val is not None else fallback_price),
+                    settlement_price=exp_val,
                     official_result=outcome,
                     settlement_source="KALSHI_VERIFIED",
                 )
