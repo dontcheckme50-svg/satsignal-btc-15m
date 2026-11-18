@@ -69,6 +69,7 @@ The shadow feed does not affect predictions or execution. It is visible on the d
 - Primary trades/books reject malformed, non-finite, crossed, future-dated and out-of-order data; source switching can recover across small exchange-clock offsets.
 - Primary feeds use exchange event timestamps when available. Closed one-second bars use the actual final trade price from that second.
 - Stale order-book depth is excluded from evidence and forces a degraded WAIT state.
+- Order-book depth must match the active spot-feed source; after a Binance/Coinbase source switch, mismatched depth is excluded and the forecast waits for a matching book.
 - Official contract selection requires a fresh, non-future Kalshi poll. Synthetic contracts remain non-actionable.
 - Paper execution independently rechecks contract time, spot-feed freshness, Kalshi quote freshness, ticker identity, probability validity and one-entry-per-contract.
 - Synthetic contracts are never graded using a later contract's fallback price.
