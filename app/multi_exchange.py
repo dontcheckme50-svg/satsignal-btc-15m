@@ -207,6 +207,12 @@ class MultiExchangeReference:
                 self.binance.last_error = f"{type(exc).__name__}: {exc}"
                 self.binance.reconnects += 1
                 await asyncio.sleep(1.5)
+            else:
+                if self._running:
+                    self.binance.connected = False
+                    self.binance.last_error = "WebSocket closed cleanly; reconnecting"
+                    self.binance.reconnects += 1
+                    await asyncio.sleep(1.5)
 
     async def _coinbase_loop(self):
         url = "wss://ws-feed.exchange.coinbase.com"
@@ -245,6 +251,12 @@ class MultiExchangeReference:
                 self.coinbase.last_error = f"{type(exc).__name__}: {exc}"
                 self.coinbase.reconnects += 1
                 await asyncio.sleep(1.5)
+            else:
+                if self._running:
+                    self.coinbase.connected = False
+                    self.coinbase.last_error = "WebSocket closed cleanly; reconnecting"
+                    self.coinbase.reconnects += 1
+                    await asyncio.sleep(1.5)
 
     async def _kraken_loop(self):
         url = "wss://ws.kraken.com/v2"
@@ -288,6 +300,12 @@ class MultiExchangeReference:
                 self.kraken.last_error = f"{type(exc).__name__}: {exc}"
                 self.kraken.reconnects += 1
                 await asyncio.sleep(1.5)
+            else:
+                if self._running:
+                    self.kraken.connected = False
+                    self.kraken.last_error = "WebSocket closed cleanly; reconnecting"
+                    self.kraken.reconnects += 1
+                    await asyncio.sleep(1.5)
 
     async def _bitstamp_poll_loop(self):
         book_url = "https://www.bitstamp.net/api/v2/order_book/btcusd/?group=1"
