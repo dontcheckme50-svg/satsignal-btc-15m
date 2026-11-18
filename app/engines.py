@@ -6,7 +6,7 @@ from app.config import settings
 from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, MarketRegime, RegimeReport, Signal, WeaknessReport
 
 class EvidenceEngine:
-    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> EvidenceMetrics:
+    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
         recent_trades = [t for t in trades if now - 60.0 <= t[0] <= now]
@@ -45,10 +45,34 @@ class EvidenceEngine:
         ret_120s = (live_price - p_120s) / p_120s if p_120s > 0 else 0.0
         mom_score = float(np.clip((ret_30s * 18000.0) + (ret_120s * 9000.0), -100.0, 100.0))
         structure = self._detect_structure(prices[-90:])
-        strike_z = self._strike_z_score(live_price, contract.strike_price, contract.seconds_remaining, ann_vol)
+        spot_z = self._strike_z_score(live_price, contract.strike_price, contract.seconds_remaining, ann_vol)
+        brti_age = official_brti_age_sec
+        brti_valid = (
+            official_brti_price is not None
+            and math.isfinite(float(official_brti_price))
+            and float(official_brti_price) > 0
+            and brti_age is not None
+            and math.isfinite(float(brti_age))
+            and 0.0 <= float(brti_age) <= settings.stale_feed_threshold_sec
+        )
+        brti_distance = (float(official_brti_price) - contract.strike_price) if brti_valid else None
+        brti_z = self._strike_z_score(float(official_brti_price), contract.strike_price, contract.seconds_remaining, ann_vol) if brti_valid else None
+        # Spot remains the primary price input; valid official BRTI contributes
+        # an independent settlement-benchmark confirmation, never a fallback.
+        strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
+        brti_spread_bps = (
+            ((float(official_brti_price) - live_price) / live_price) * 10000.0
+            if brti_valid and live_price > 0 else None
+        )
+        brti_conflict = bool(
+            brti_valid
+            and dist * float(brti_distance) < 0
+            and abs(dist / contract.strike_price * 10000.0) >= 0.5
+            and abs(float(brti_distance) / contract.strike_price * 10000.0) >= 0.5
+        )
         raw_score = float(np.clip(((buy_pct - 50.0) / 50.0) * 30.0 + (0.65 * obi + 0.35 * large_bias) * 25.0 + (mom_score / 100.0) * 25.0 + float(np.clip(strike_z * 12.0, -20.0, 20.0)), -100.0, 100.0))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
-        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig)
+        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict)
 
     @staticmethod
     def _compute_rsi(prices: List[float], period: int = 14) -> float:
@@ -89,6 +113,8 @@ class WeaknessEngine:
             feed_bad = True; penalty += 50.0; flags.append(f"Delayed or missing spot feed ({spot_age_sec}s old)")
         if book_age_sec is None or book_age_sec > settings.stale_feed_threshold_sec:
             feed_bad = True; penalty += 25.0; flags.append(f"Delayed or missing order-book feed ({book_age_sec}s old)")
+        if ev.brti_conflict:
+            penalty += 20.0; flags.append("Official BRTI and spot are on opposite sides of the Kalshi strike")
         if ev.buying_pressure_pct >= 62.0 and ev.momentum_score < -10.0:
             absorption = True; penalty += 25.0; flags.append("Sell-wall absorption: heavy taker buying failing to lift price")
         elif ev.selling_pressure_pct >= 62.0 and ev.momentum_score > 10.0:
