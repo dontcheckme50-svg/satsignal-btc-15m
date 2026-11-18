@@ -46,6 +46,10 @@ class MarketDataHub:
         self.brti_detail: str = "No Kalshi/CFB BRTI entitlement configured"
         self._running = False
         self._tasks = []
+        self._feed_runtime = {
+            "Spot Feed Worker": {"state": "STOPPED", "restart_count": 0, "last_error": None, "started_ts": None},
+            "Kalshi Feed Worker": {"state": "STOPPED", "restart_count": 0, "last_error": None, "started_ts": None},
+        }
         self.multi_exchange = MultiExchangeReference()
         self._private_key = self._load_kalshi_key()
 
@@ -127,11 +131,40 @@ class MarketDataHub:
         self._running = True
         await self.multi_exchange.start()
         self._tasks = [
-            asyncio.create_task(self._spot_stream_loop(), name="spot-feed"),
-            asyncio.create_task(self._kalshi_market_loop(), name="kalshi-feed"),
+            asyncio.create_task(
+                self._run_supervised_feed("Spot Feed Worker", self._spot_stream_loop),
+                name="spot-feed-supervisor",
+            ),
+            asyncio.create_task(
+                self._run_supervised_feed("Kalshi Feed Worker", self._kalshi_market_loop),
+                name="kalshi-feed-supervisor",
+            ),
         ]
         if self._private_key and settings.kalshi_key_id:
             self._tasks.append(asyncio.create_task(self._brti_poll_loop(), name="brti-feed"))
+
+    async def _run_supervised_feed(self, worker_name: str, runner, retry_delay: float = 2.0) -> None:
+        """Keep critical feed workers alive if an unexpected exception escapes a feed loop."""
+        runtime = self._feed_runtime[worker_name]
+        while self._running:
+            runtime["state"] = "RUNNING"
+            runtime["started_ts"] = time.time()
+            try:
+                await runner()
+                if not self._running:
+                    break
+                runtime["last_error"] = "Worker exited unexpectedly"
+                logger.error("%s exited while feed hub was running; restarting", worker_name)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                runtime["last_error"] = f"{type(exc).__name__}: {exc}"
+                logger.exception("%s crashed; restarting", worker_name)
+            if self._running:
+                runtime["restart_count"] += 1
+                runtime["state"] = "RESTARTING"
+                await asyncio.sleep(retry_delay)
+        runtime["state"] = "STOPPED"
 
     async def stop(self) -> None:
         self._running = False
@@ -468,9 +501,23 @@ class MarketDataHub:
             age_seconds=multi.get("reference_age_seconds"),
             detail=f"Reference={multi.get('reference_price')} | live venues={multi['venue_count_live']} | outliers={multi['outlier_venues']}",
         ))
+        worker_statuses = []
+        for name, runtime in self._feed_runtime.items():
+            started_ts = runtime.get("started_ts")
+            worker_age = safe_age_seconds(started_ts, now)
+            detail = f"restarts={runtime['restart_count']}"
+            if runtime.get("last_error"):
+                detail += f" | last error={runtime['last_error']}"
+            worker_statuses.append(FeedStatus(
+                name=name,
+                status=runtime["state"],
+                last_updated_iso=iso_now(started_ts) if started_ts else None,
+                age_seconds=worker_age,
+                detail=detail,
+            ))
         return [
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts else None, age_seconds=spot_age, detail=self.active_spot_source),
             FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels | source={self.last_book_source} | active spot={self.active_spot_source}"),
             FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts else None, age_seconds=kalshi_age, detail=self.kalshi_status_detail),
             FeedStatus(name="CF Benchmarks BRTI", status=brti_display_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
-        ] + venue_statuses
+        ] + worker_statuses + venue_statuses
