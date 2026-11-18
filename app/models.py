@@ -92,6 +92,7 @@ class EngineStatusSummary(BaseModel):
 
 class PredictionRecord(BaseModel):
     id: Optional[int] = None
+    is_official_lock: bool = True
     contract_ticker: str
     timestamp_iso: str
     epoch_ts: float
