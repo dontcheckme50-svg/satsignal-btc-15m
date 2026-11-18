@@ -260,13 +260,13 @@ def test_direction_reversal_resets_confirmation_and_requires_two_new_matches(tmp
 
     _evaluate_sequence(
         orchestrator, hub, contract.ticker, now,
-        [Signal.UP, Signal.DOWN, Signal.DOWN],
+        [Signal.UP, Signal.DOWN],
     )
     assert ledger.get_recent_predictions() == []
     assert orchestrator._directional_lock_candidate == Signal.DOWN
-    assert orchestrator._directional_lock_candidate_count == 2
+    assert orchestrator._directional_lock_candidate_count == 1
 
-    _evaluate_sequence(orchestrator, hub, contract.ticker, now + 3.0, [Signal.DOWN])
+    _evaluate_sequence(orchestrator, hub, contract.ticker, now + 2.0, [Signal.DOWN])
     records = ledger.get_recent_predictions()
     assert len(records) == 1
     assert records[0].final_signal == Signal.DOWN
@@ -297,7 +297,7 @@ def test_unconfirmed_direction_at_final_lockout_becomes_wait(tmp_path):
 
     _evaluate_sequence(
         orchestrator, hub, contract.ticker, now,
-        [Signal.UP, Signal.UP], remaining=65.0,
+        [Signal.UP, Signal.UP], remaining=66.0,
     )
 
     records = ledger.get_recent_predictions()
