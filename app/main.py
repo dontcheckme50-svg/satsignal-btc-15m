@@ -298,7 +298,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("sb-early").textContent = `${d.scoreboard.early_wins} / ${d.scoreboard.early_losses} / ${d.scoreboard.early_accuracy_pct}% (${d.scoreboard.early_scored} scored)`;
     document.getElementById("sb-brier").textContent = d.scoreboard.brier_score != null ? d.scoreboard.brier_score.toFixed(4) : "Awaiting settlements";
     document.getElementById("sb-waits").textContent = d.scoreboard.waits_issued;
-    document.getElementById("feeds-list").innerHTML = d.feeds.map(f => `<div class="kv"><span><i class="feed-dot st-${f.status}"></i>${f.name}</span><span>${f.status} ${f.age_seconds!=null?"("+f.age_seconds+"s)":""} — ${f.detail}</span></div>`).join("");
+    renderFeedStatuses(d.feeds);
     document.getElementById("trades-body").innerHTML = (d.recent_trades||[]).map(t => `<tr><td>${t.timestamp_iso.split(" ")[1]}</td><td>${t.mode.toUpperCase()}</td><td>${t.contract_ticker}</td><td>${t.side}</td><td>${t.contracts}</td><td>$${t.entry_price.toFixed(2)}</td><td>${t.quote_source}</td><td>$${t.fee_paid.toFixed(2)}</td><td>+${(t.net_edge*100).toFixed(1)}c</td><td>${t.status}</td><td style="color:${t.pnl_usd>=0?'var(--up)':'var(--down)'};font-weight:700;">${t.pnl_usd>=0?'+':''}$${t.pnl_usd.toFixed(2)}</td></tr>`).join("");
     document.getElementById("history-body").innerHTML = (d.recent_predictions||[]).map(p => {
       let resText = "PENDING";
@@ -332,6 +332,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("mx-method").textContent = m.method;
     } catch(e) {}
   }
+  function renderFeedStatuses(feeds) {
+    if (!Array.isArray(feeds)) return;
+    document.getElementById("feeds-list").innerHTML = feeds.map(f => `<div class="kv"><span><i class="feed-dot st-${f.status}"></i>${f.name}</span><span>${f.status} ${f.age_seconds!=null?"("+Number(f.age_seconds).toFixed(1)+"s)":""} — ${f.detail}</span></div>`).join("");
+  }
+  // Feed telemetry must refresh independently of prediction snapshots. If spot
+  // data stops, the last websocket snapshot may remain unchanged while these
+  // statuses correctly age into STALE/UNAVAILABLE.
+  async function fetchFeeds() {
+    try {
+      const res = await fetch("/api/feeds", {cache:"no-store"});
+      if (!res.ok) return;
+      const payload = await res.json();
+      renderFeedStatuses(payload.feeds);
+    } catch(e) {}
+  }
   async function fetchOrchestratorHealth() {
     const systemEl = document.getElementById("system-health");
     const marketEl = document.getElementById("market-health");
@@ -358,7 +373,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); fetchMultiExchange(); fetchOrchestratorHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500);
+  fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500);
 </script>
 </body>
 </html>"""
