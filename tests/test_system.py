@@ -411,7 +411,7 @@ def test_brti_parser_rejects_nonfinite_and_nonpositive_values():
 
 
 
-def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch):
+def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch, tmp_path):
     from app.orchestrator import PredictorOrchestrator
 
     hub = MarketDataHub()
@@ -421,7 +421,7 @@ def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch):
         (int(now - 5), 89999.0, 0.1),
         (int(now + 100), 999999.0, 100.0),
     ])
-    orchestrator = PredictorOrchestrator(hub, PredictionLedger(":memory:"))
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger(str(tmp_path / "regime-bars.db")))
     captured = {}
     original = orchestrator.regime_engine.analyze
 
