@@ -21,7 +21,7 @@ class PredictorOrchestrator:
         self.early_engine = EarlyPredictionEngine()
         self.final_engine = FinalDecisionEngine()
         self.active_contract: Optional[ContractInfo] = None
-        self.last_logged_ts: float = 0.0
+        self.last_logged_ts: float = 0.0\n        self.last_multi_exchange_logged_ts: float = 0.0
         self.latest_snapshot: Optional[DashboardSnapshot] = None
         self.latest_baseline_z_prob: float = 0.5
         self._listeners: List[Callable[[DashboardSnapshot], None]] = []
@@ -86,6 +86,20 @@ class PredictorOrchestrator:
             self.last_logged_ts = 0.0
         self.active_contract = new_contract
         spot_age = round(ts - self.hub.last_spot_ts, 2) if self.hub.last_spot_ts else None
+        multi_reference = self.hub.get_multi_exchange_snapshot()
+        if record_to_db and ts - self.last_multi_exchange_logged_ts >= 5.0:
+            try:
+                self.ledger.record_multi_exchange_reference(
+                    epoch_ts=ts,
+                    contract_ticker=new_contract.ticker,
+                    strike_price=new_contract.strike_price,
+                    primary_spot_price=live_price,
+                    official_brti_price=self.hub.official_brti_price,
+                    snapshot=multi_reference,
+                )
+                self.last_multi_exchange_logged_ts = ts
+            except Exception:
+                logger.exception("Failed to persist multi-exchange shadow observation")
         ev = self.evidence_engine.analyze(ts, live_price, new_contract, list(self.hub.trades), list(self.hub.bars_1s), list(self.hub.bids), list(self.hub.asks))
         weakness = self.weakness_engine.analyze(ev, spot_age)
         regime = self.regime_engine.analyze(ev, weakness, list(self.hub.bars_1s))
