@@ -1542,3 +1542,54 @@ def test_feed_statuses_expose_supervisor_restart_diagnostics():
     assert statuses["Kalshi Feed Worker"].status == "RESTARTING"
     assert "restarts=2" in statuses["Kalshi Feed Worker"].detail
     assert "simulated timeout" in statuses["Kalshi Feed Worker"].detail
+
+
+def test_all_prediction_engines_disclose_stale_cached_spot_and_recover(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)], source="BINANCE_SPOT")
+    hub.kalshi_contract = _contract(
+        open_timestamp=now - 10.0,
+        close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub.last_kalshi_ts = now
+    # The cached price remains populated, but its source timestamp is stale.
+    hub.last_spot_ts = now - settings.stale_feed_threshold_sec - 1.0
+
+    ledger = PredictionLedger(str(tmp_path / "stale-engine-inputs.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    stale = orchestrator.evaluate_once(now=now, record_to_db=True)
+
+    assert stale is not None
+    assert stale.final.signal == Signal.WAIT
+    assert "stale or degraded" in stale.final.rationale.lower()
+    assert stale.engines.engine_a_evidence["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_b_weakness["status"] == "DEGRADED_FEED"
+    assert stale.engines.engine_c_regime["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_d_early["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_e_final["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_a_evidence["input_health"]["fresh"] is False
+    assert stale.engines.engine_a_evidence["input_health"]["contract_ticker"] == stale.contract.ticker
+    assert ledger.has_official_prediction_lock(stale.contract.ticker) is False
+
+    # Once both live spot and its matching book recover, engine health recovers
+    # on the next evaluation without restarting the orchestrator or engines.
+    recovered_at = now + 1.0
+    hub.ingest_trade(recovered_at, 90012.0, 0.15, False, "BINANCE_SPOT")
+    hub.ingest_book(
+        recovered_at, [(90011.0, 2.0)], [(90013.0, 2.0)],
+        source="BINANCE_SPOT",
+    )
+    hub.last_kalshi_ts = recovered_at
+    recovered = orchestrator.evaluate_once(now=recovered_at, record_to_db=False)
+
+    assert recovered is not None
+    assert recovered.engines.engine_a_evidence["status"] == "ACTIVE"
+    assert recovered.engines.engine_c_regime["status"] == "ACTIVE"
+    assert recovered.engines.engine_d_early["status"] in {"ACTIVE_WINDOW", "MONITORING"}
+    assert recovered.engines.engine_e_final["status"] == "ACTIVE"
+    assert recovered.engines.engine_a_evidence["input_health"]["fresh"] is True
