@@ -197,7 +197,7 @@ class MultiExchangeReference:
             excluded = [v["venue"] for v in usd_live if v not in accepted]
             # Weight accepted USD venues by near-market quote depth, capped to prevent one venue dominating.
             weights = [max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0)) for v in accepted]
-            if accepted:
+            if len(accepted) >= 2:
                 composite = sum(v["mid"] * w for v, w in zip(accepted, weights)) / sum(weights)
         total_bid_depth = sum(v["bid_depth_25bps"] for v in accepted)
         total_ask_depth = sum(v["ask_depth_25bps"] for v in accepted)
