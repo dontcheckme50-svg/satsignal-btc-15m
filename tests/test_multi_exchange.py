@@ -267,3 +267,21 @@ def test_bitstamp_ticker_poll_does_not_claim_trade_freshness():
 
     assert snapshot["last_trade_age_seconds"] is None
     assert snapshot["last_ticker_age_seconds"] == 5.0
+
+
+
+def test_invalid_order_book_side_is_ignored():
+    venue = VenueBook("TEST", "USD")
+    venue.update_level("mystery", 100.0, 1.0)
+
+    assert venue.bids == {}
+    assert venue.asks == {}
+
+
+def test_future_trade_timestamp_is_not_reported_as_zero_age():
+    venue = VenueBook("TEST", "USD")
+    venue.last_trade_ts = 1005.0
+
+    flow = venue.trade_flow_snapshot(now=1000.0)
+
+    assert flow["latest_trade_age_seconds"] is None
