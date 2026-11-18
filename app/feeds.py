@@ -180,9 +180,16 @@ class MarketDataHub:
             try:
                 if not use_coinbase: await self._run_binance_ws()
                 else: await self._run_coinbase_ws()
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 use_coinbase = True if ("451" in str(exc) or "403" in str(exc)) else (not use_coinbase)
                 await asyncio.sleep(1.5)
+            else:
+                # A clean server-side close is still a disconnect; avoid a
+                # tight reconnect loop and allow freshness to decay.
+                if self._running:
+                    await asyncio.sleep(1.5)
 
     async def _run_binance_ws(self) -> None:
         async with websockets.connect(settings.binance_ws_url, ping_interval=20, open_timeout=8) as ws:
