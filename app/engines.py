@@ -166,7 +166,17 @@ class EarlyPredictionEngine:
 
 class FinalDecisionEngine:
     def decide(self, ev: EvidenceMetrics, weakness: WeaknessReport, regime: RegimeReport, early: EarlyPredictionReport, contract: ContractInfo, weights: dict) -> FinalDecisionReport:
-        z_terminal = EvidenceEngine._strike_z_score(ev.live_price, contract.strike_price, contract.seconds_remaining, ev.volatility_annualized)
+        # Use the exact strike-distance evidence produced upstream. This carries
+        # fresh official BRTI confirmation through to the final probability while
+        # retaining spot-only behavior for legacy EvidenceMetrics payloads.
+        z_terminal = (
+            float(ev.strike_z_score)
+            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
+            else EvidenceEngine._strike_z_score(
+                ev.live_price, contract.strike_price,
+                contract.seconds_remaining, ev.volatility_annualized,
+            )
+        )
         micro_drift_z = ((ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)) + ((early.up_prob - 0.5) * 0.45 * weights.get("early", 1.0))
         raw_up_prob = float(np.clip(norm.cdf(z_terminal + micro_drift_z), 0.02, 0.98))
         shrink = min(0.70, weakness.weakness_score / 130.0)
