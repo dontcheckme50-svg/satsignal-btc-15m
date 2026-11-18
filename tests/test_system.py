@@ -414,6 +414,24 @@ def test_stale_official_brti_is_excluded_without_becoming_a_spot_fallback():
     assert with_stale_brti.raw_score == without_brti.raw_score
 
 
+def test_evidence_engine_excludes_stale_bars_from_short_horizon_signals():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    stale_bars = [
+        (int(now - 900 + i), 80000.0 + i * 100.0, 1.0)
+        for i in range(120)
+    ]
+    baseline = EvidenceEngine().analyze(now, 90010.0, contract, [], [], [], [])
+    with_stale_history = EvidenceEngine().analyze(
+        now, 90010.0, contract, [], stale_bars, [], []
+    )
+
+    assert with_stale_history.momentum_score == baseline.momentum_score
+    assert with_stale_history.rsi_14 == baseline.rsi_14
+    assert with_stale_history.volatility_annualized == baseline.volatility_annualized
+    assert with_stale_history.structure_bias == baseline.structure_bias
+
+
 def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     now = 1_000_000.0
     contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
