@@ -1,7 +1,7 @@
 import math, time
 from app.config import settings
 from app.database import PredictionLedger
-from app.feeds import MarketDataHub, iso_now
+from app.feeds import MarketDataHub, iso_now, safe_age_seconds
 from app.models import ContractInfo, FinalDecisionReport, Signal, TradeRecord
 
 
@@ -42,6 +42,15 @@ class ExecutionManager:
         if not (contract.open_timestamp <= execution_now < contract.close_timestamp):
             return None
         if (contract.close_timestamp - execution_now) < settings.final_lockout_seconds:
+            return None
+        spot_age = safe_age_seconds(self.hub.last_spot_ts, execution_now)
+        kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, execution_now)
+        if spot_age is None or spot_age > settings.stale_feed_threshold_sec:
+            return None
+        if kalshi_age is None or kalshi_age > 12.0:
+            return None
+        active_market = self.hub.kalshi_contract
+        if active_market is None or active_market.ticker != contract.ticker:
             return None
 
         sb = self.ledger.get_scoreboard()
