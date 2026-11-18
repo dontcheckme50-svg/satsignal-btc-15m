@@ -269,3 +269,21 @@ def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
     assert evidence.trade_delta_60s == 0.2
     assert evidence.cvd_contract == 0.2
     assert evidence.buying_pressure_pct == 75.0
+
+
+
+def test_feed_status_marks_future_timestamps_invalid():
+    hub = MarketDataHub()
+    future = time.time() + 5.0
+    hub.last_spot_ts = future
+    hub.active_spot_source = "BINANCE_SPOT"
+    hub.last_book_ts = future
+    hub.last_brti_ts = future
+    hub.brti_status = "LIVE"
+    hub.official_brti_price = 90000.0
+
+    statuses = {item.name: item.status for item in hub.get_feed_statuses()}
+
+    assert statuses["Primary Spot Feed"] == "FUTURE_TIMESTAMP"
+    assert statuses["Order Book Depth"] == "FUTURE_TIMESTAMP"
+    assert statuses["CF Benchmarks BRTI"] == "FUTURE_TIMESTAMP"
