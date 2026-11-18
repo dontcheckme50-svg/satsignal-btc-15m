@@ -253,13 +253,31 @@ class MultiExchangeReference:
                         now = time.time()
                         typ = msg.get("type")
                         if typ == "snapshot" and msg.get("product_id") == "BTC-USD":
-                            self.coinbase.bids = {float(p): float(q) for p, q in msg.get("bids", []) if float(q) > 0}
-                            self.coinbase.asks = {float(p): float(q) for p, q in msg.get("asks", []) if float(q) > 0}
-                            self.coinbase.last_book_ts = now
+                            self.coinbase.bids.clear()
+                            self.coinbase.asks.clear()
+                            valid_levels = 0
+                            for price, qty in msg.get("bids", []):
+                                before = len(self.coinbase.bids)
+                                self.coinbase.update_level("bid", float(price), float(qty))
+                                valid_levels += int(len(self.coinbase.bids) > before)
+                            for price, qty in msg.get("asks", []):
+                                before = len(self.coinbase.asks)
+                                self.coinbase.update_level("ask", float(price), float(qty))
+                                valid_levels += int(len(self.coinbase.asks) > before)
+                            if valid_levels:
+                                self.coinbase.last_book_ts = now
                         elif typ == "l2update" and msg.get("product_id") == "BTC-USD":
+                            valid_changes = 0
                             for side, price, qty in msg.get("changes", []):
-                                self.coinbase.update_level(side, float(price), float(qty))
-                            self.coinbase.last_book_ts = now
+                                try:
+                                    price, qty = float(price), float(qty)
+                                except (TypeError, ValueError):
+                                    continue
+                                if math.isfinite(price) and price > 0 and math.isfinite(qty):
+                                    self.coinbase.update_level(side, price, qty)
+                                    valid_changes += 1
+                            if valid_changes:
+                                self.coinbase.last_book_ts = now
                         elif typ == "match" and msg.get("product_id") == "BTC-USD":
                             p, q = float(msg["price"]), float(msg["size"])
                             # Coinbase match side is maker-side; invert to aggressor side.
@@ -297,18 +315,23 @@ class MultiExchangeReference:
                         channel, data_rows = msg.get("channel"), msg.get("data", [])
                         now = time.time()
                         if channel == "book":
+                            valid_updates = 0
                             for row in data_rows:
                                 for side_key, side in (("bids", "bid"), ("asks", "ask")):
                                     target = self.kraken.bids if side == "bid" else self.kraken.asks
                                     if msg.get("type") == "snapshot":
                                         target.clear()
                                     for level in row.get(side_key, []):
-                                        price, qty = float(level["price"]), float(level["qty"])
-                                        if qty <= 0:
-                                            target.pop(price, None)
-                                        else:
-                                            target[price] = qty
-                            self.kraken.last_book_ts = now
+                                        try:
+                                            price, qty = float(level["price"]), float(level["qty"])
+                                        except (KeyError, TypeError, ValueError):
+                                            continue
+                                        if not math.isfinite(price) or price <= 0 or not math.isfinite(qty):
+                                            continue
+                                        self.kraken.update_level(side, price, qty)
+                                        valid_updates += 1
+                            if valid_updates:
+                                self.kraken.last_book_ts = now
                         elif channel == "trade":
                             for trade in data_rows:
                                 p, q = float(trade["price"]), float(trade["qty"])
