@@ -42,13 +42,14 @@ class PredictorOrchestrator:
 
     def _resolve_active_contract(self, now: float, live_price: float) -> ContractInfo:
         kc = self.hub.kalshi_contract
+        kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, now)
         if (
             kc is not None
             and kc.is_official_kalshi
             and kc.strike_source == "KALSHI_OFFICIAL"
             and kc.open_timestamp <= now < kc.close_timestamp
-            and self.hub.last_kalshi_ts > 0
-            and now - self.hub.last_kalshi_ts <= 12.0
+            and kalshi_age is not None
+            and kalshi_age <= 12.0
         ):
             rem = max(0.0, kc.close_timestamp - now)
             cp_rem = rem % settings.checkpoint_interval_sec
