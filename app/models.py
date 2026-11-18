@@ -50,6 +50,11 @@ class EvidenceMetrics(BaseModel):
     structure_bias: str
     raw_score: float
     signal: Signal
+    official_brti_price: Optional[float] = None
+    official_brti_age_seconds: Optional[float] = None
+    brti_distance_from_strike: Optional[float] = None
+    brti_spot_spread_bps: Optional[float] = None
+    brti_conflict: bool = False
 
 class WeaknessReport(BaseModel):
     weakness_score: float
