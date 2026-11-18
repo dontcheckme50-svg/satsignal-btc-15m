@@ -55,6 +55,9 @@ class EvidenceMetrics(BaseModel):
     brti_distance_from_strike: Optional[float] = None
     brti_spot_spread_bps: Optional[float] = None
     brti_conflict: bool = False
+    # Blended spot/BRTI strike-distance evidence used by the final probability engine.
+    # Optional for compatibility with historical observations and older payloads.
+    strike_z_score: Optional[float] = None
 
 class WeaknessReport(BaseModel):
     weakness_score: float
