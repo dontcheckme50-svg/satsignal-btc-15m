@@ -32,7 +32,7 @@ class VenueBook:
         now = now or time.time()
         bids = sorted(self.bids.items(), reverse=True)[:max_levels]
         asks = sorted(self.asks.items())[:max_levels]
-        age = now - self.last_book_ts if self.last_book_ts else None
+        age = max(0.0, now - self.last_book_ts) if self.last_book_ts else None
         if not bids or not asks or age is None or age > 5.0:
             return {
                 "venue": self.name, "quote": self.quote, "status": "STALE" if age is not None else "UNAVAILABLE",
