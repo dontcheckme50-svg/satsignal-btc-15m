@@ -75,6 +75,10 @@ async def get_market():
 async def get_feeds():
     return {"feeds": [f.model_dump() for f in hub.get_feed_statuses()]}
 
+@app.get("/api/multi-exchange")
+async def get_multi_exchange():
+    return hub.get_multi_exchange_snapshot()
+
 @app.get("/api/history")
 async def get_history(limit: int = 50):
     return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
