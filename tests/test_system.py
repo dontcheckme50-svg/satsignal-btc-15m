@@ -358,3 +358,17 @@ def test_volume_ratio_is_neutral_when_history_is_shorter_than_one_minute():
     evidence = EvidenceEngine().analyze(now, 90010.0, contract, trades, [], [], [])
 
     assert evidence.volume_ratio == 1.0
+
+
+
+def test_primary_binance_feed_is_not_mirrored_into_independent_shadow_venue():
+    hub = MarketDataHub()
+    now = time.time()
+    hub.ingest_trade(now, 90000.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(89999.0, 2.0)], [(90001.0, 2.0)])
+
+    snapshot = hub.get_multi_exchange_snapshot()
+    shadow_binance = next(v for v in snapshot["venues"] if v["venue"] == "BINANCE")
+
+    assert shadow_binance["status"] == "UNAVAILABLE"
+    assert shadow_binance["mid"] is None
