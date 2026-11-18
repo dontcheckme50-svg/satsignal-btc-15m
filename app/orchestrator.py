@@ -5,7 +5,7 @@ from app.config import settings
 from app.database import PredictionLedger
 from app.engines import EarlyPredictionEngine, EvidenceEngine, FinalDecisionEngine, RegimeEngine, WeaknessEngine
 from app.execution import ExecutionManager
-from app.feeds import MarketDataHub, iso_now
+from app.feeds import MarketDataHub, iso_now, safe_age_seconds
 from app.models import ContractInfo, DashboardSnapshot, EngineStatusSummary, PredictionRecord, Signal
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class PredictorOrchestrator:
                 self.ledger.settle_contract(self.active_contract.ticker, settlement_price=live_price, settlement_source="SPOT_CLOSE_PROXY")
             self.last_logged_ts = 0.0
         self.active_contract = new_contract
-        spot_age = round(ts - self.hub.last_spot_ts, 2) if self.hub.last_spot_ts else None
+        spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
         multi_reference = self.hub.get_multi_exchange_snapshot()
         multi_reference["strike_price"] = new_contract.strike_price
         reference_price = multi_reference.get("reference_price")
