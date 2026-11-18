@@ -7,7 +7,7 @@ from pathlib import Path
 from app.config import settings
 from app.database import PredictionLedger
 from app.execution import ExecutionManager
-from app.engines import EvidenceEngine, WeaknessEngine
+from app.engines import EarlyPredictionEngine, EvidenceEngine, WeaknessEngine
 from app.feeds import MarketDataHub
 from fastapi.testclient import TestClient
 from app.main import app
@@ -366,6 +366,24 @@ def test_final_decision_uses_blended_official_brti_strike_evidence():
     expected_probability = round(float(norm.cdf(expected_blended_z + micro_drift_z)), 4)
 
     assert final.up_probability == expected_probability
+
+
+def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
+    from app.models import WeaknessReport
+    from scipy.stats import norm
+
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    evidence = EvidenceEngine().analyze(
+        now, 90010.0, contract, [], [], [], [],
+        official_brti_price=89980.0, official_brti_age_sec=0.5,
+    )
+    weakness = WeaknessReport(weakness_score=0.0)
+    early = EarlyPredictionEngine().analyze(evidence, weakness, contract)
+    expected_logit = 0.85 * evidence.strike_z_score
+    expected_up_probability = round(float(norm.cdf(expected_logit)), 4)
+
+    assert early.up_prob == expected_up_probability
 
 
 def test_brti_spot_strike_conflict_is_flagged_as_weakness():
