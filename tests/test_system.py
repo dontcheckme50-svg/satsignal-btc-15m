@@ -582,3 +582,21 @@ def test_execution_rejects_nonfinite_model_probability(tmp_path):
 
     assert result is None
     assert ledger.get_recent_trades() == []
+
+
+
+def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "one-entry-per-contract.db"))
+    manager = ExecutionManager(MarketDataHub(), ledger)
+    contract = _contract()
+
+    import asyncio
+    first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
+    assert first is not None
+    ledger.settle_contract(contract.ticker, settlement_price=90020.0, official_result="UP")
+
+    second = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
+
+    assert second is None
+    assert len(ledger.get_recent_trades()) == 1
+    assert ledger.get_recent_trades()[0].status == "SETTLED"
