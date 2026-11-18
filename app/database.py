@@ -193,8 +193,16 @@ class PredictionLedger:
             return int(cur.lastrowid)
 
     def get_unsettled_contract_tickers(self) -> List[str]:
+        # Only official contracts have an authoritative settlement source.
+        # Synthetic proxy contracts must never enter the official settlement queue.
         with self._connection() as conn:
-            rows = conn.execute("SELECT DISTINCT contract_ticker FROM predictions WHERE settled = 0").fetchall()
+            rows = conn.execute(
+                """SELECT contract_ticker, MIN(epoch_ts) AS first_prediction_ts
+                   FROM predictions
+                   WHERE settled = 0 AND contract_ticker LIKE 'KXBTC15M%'
+                   GROUP BY contract_ticker
+                   ORDER BY first_prediction_ts ASC"""
+            ).fetchall()
             return [r["contract_ticker"] for r in rows]
 
     def count_open_contracts_for_ticker(self, contract_ticker: str) -> int:
