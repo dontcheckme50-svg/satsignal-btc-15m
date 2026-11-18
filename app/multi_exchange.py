@@ -76,7 +76,7 @@ class VenueBook:
             ((p, q) for p, q in self.asks.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
         )[:max_levels]
         raw_age = (now - self.last_book_ts) if self.last_book_ts else None
-        age = raw_age if raw_age is not None and raw_age >= 0 else None
+        age = max(0.0, raw_age) if raw_age is not None and raw_age >= -0.5 else None
         book_valid = bool(bids and asks and bids[0][0] > 0 and asks[0][0] > 0 and bids[0][1] > 0 and asks[0][1] > 0 and bids[0][0] < asks[0][0])
         future_timestamp = raw_age is not None and raw_age < -0.5
         if not book_valid or age is None or age > 5.0:
