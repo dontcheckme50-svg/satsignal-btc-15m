@@ -1,4 +1,4 @@
-import asyncio, base64, json, math, time
+import asyncio, base64, json, math, time, logging
 from collections import deque
 from datetime import datetime, timezone
 from typing import Deque, List, Optional, Tuple
@@ -8,6 +8,8 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, padding
 from app.config import settings
 from app.models import ContractInfo, FeedStatus
 from app.multi_exchange import MultiExchangeReference
+
+logger = logging.getLogger(__name__)
 
 def safe_age_seconds(ts: Optional[float], now: Optional[float] = None) -> Optional[float]:
     if not ts:
