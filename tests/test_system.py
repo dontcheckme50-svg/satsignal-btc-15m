@@ -633,3 +633,54 @@ def test_execution_refuses_stale_feed_independent_of_prediction(tmp_path, stale_
 
     assert result is None
     assert ledger.get_recent_trades() == []
+
+
+
+@pytest.mark.asyncio
+async def test_prediction_loop_does_not_wait_for_settlement_worker(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app.orchestrator import PredictorOrchestrator
+
+    ledger = PredictionLedger(str(tmp_path / "settlement-background.db"))
+    orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
+    original_sleep = asyncio.sleep
+    cycles = {"count": 0}
+    settlement = {"started": False, "completed": False}
+
+    fake_snapshot = SimpleNamespace(
+        contract=SimpleNamespace(ticker="KXBTC15M-CURRENT"),
+        evidence=SimpleNamespace(live_price=90000.0),
+        final=SimpleNamespace(signal=Signal.WAIT),
+        scoreboard=None,
+        recent_predictions=[],
+        recent_trades=[],
+    )
+
+    def fake_evaluate_once(now=None, record_to_db=True):
+        cycles["count"] += 1
+        return fake_snapshot
+
+    async def fake_execute(*args, **kwargs):
+        return None
+
+    async def slow_reconcile(*args, **kwargs):
+        settlement["started"] = True
+        await original_sleep(0.2)
+        settlement["completed"] = True
+
+    async def run_loop_sleep(_seconds):
+        await original_sleep(0)
+        if cycles["count"] >= 10:
+            orchestrator.stop()
+
+    orchestrator.evaluate_once = fake_evaluate_once
+    orchestrator.reconcile_unsettled_contracts = slow_reconcile
+    monkeypatch.setattr(orchestrator.executor, "evaluate_and_execute", fake_execute)
+    monkeypatch.setattr("app.orchestrator.asyncio.sleep", run_loop_sleep)
+
+    await orchestrator.run()
+
+    assert cycles["count"] >= 10
+    assert settlement["started"] is True
+    assert settlement["completed"] is False
+    await orchestrator.shutdown_background_tasks()
