@@ -551,3 +551,34 @@ def test_order_book_source_switch_allows_timestamp_offset():
     assert hub.bids[0][0] == 90000.0
     assert hub.last_book_source == "COINBASE_FALLBACK"
     assert hub.last_book_ts == pytest.approx(now - 0.2)
+
+
+
+def test_execution_rechecks_actual_contract_expiration_not_snapshot_countdown(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "execution-expiry.db"))
+    hub = MarketDataHub()
+    manager = ExecutionManager(hub, ledger)
+    now = time.time()
+    stale_countdown = _contract(
+        open_timestamp=now - 100.0,
+        close_timestamp=now + 20.0,
+        seconds_remaining=800.0,
+    )
+
+    import asyncio
+    result = asyncio.run(manager.evaluate_and_execute(now, stale_countdown, _decision()))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
+
+
+def test_execution_rejects_nonfinite_model_probability(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "execution-probability.db"))
+    manager = ExecutionManager(MarketDataHub(), ledger)
+    bad_probability = _decision(up=float("nan"), down=0.05)
+
+    import asyncio
+    result = asyncio.run(manager.evaluate_and_execute(time.time(), _contract(), bad_probability))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
