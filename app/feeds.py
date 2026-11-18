@@ -36,6 +36,7 @@ class MarketDataHub:
         self.bids: List[Tuple[float, float]] = []
         self.asks: List[Tuple[float, float]] = []
         self.last_book_ts: float = 0.0
+        self.last_book_source: str = "NONE"
         self.kalshi_contract: Optional[ContractInfo] = None
         self.last_kalshi_ts: float = 0.0
         self.kalshi_status_detail: str = "Initializing..."
@@ -76,12 +77,12 @@ class MarketDataHub:
         now = time.time()
         if not all(math.isfinite(v) for v in (ts, price, qty)) or ts <= 0 or price <= 0 or qty <= 0:
             return
-        if ts > now + 0.5 or ts < self.last_spot_ts:
+        if ts > now + 0.5 or (source == self.active_spot_source and ts < self.last_spot_ts):
             return
         if not isinstance(is_buyer_maker, bool) or not isinstance(source, str) or not source.strip():
             return
         self.live_price = price
-        self.last_spot_ts = max(ts, self.last_spot_ts)
+        self.last_spot_ts = ts
         self.active_spot_source = source
         self.trades.append((ts, price, qty, is_buyer_maker))
         sec = int(ts)
@@ -102,21 +103,23 @@ class MarketDataHub:
         # Timestamp ordering is validated above, so closed seconds never receive
         # late updates. Gaps remain gaps rather than fabricated candles.
 
-    def ingest_book(self, ts: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> None:
+    def ingest_book(self, ts: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], source: Optional[str] = None) -> None:
         try:
             ts = float(ts)
             clean_bids = [(float(p), float(q)) for p, q in bids if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
             clean_asks = [(float(p), float(q)) for p, q in asks if math.isfinite(float(p)) and math.isfinite(float(q)) and float(p) > 0 and float(q) > 0]
         except (TypeError, ValueError, IndexError):
             return
-        if not math.isfinite(ts) or ts <= 0 or ts > time.time() + 0.5 or ts < self.last_book_ts:
+        book_source = source or self.active_spot_source or "UNKNOWN"
+        if not math.isfinite(ts) or ts <= 0 or ts > time.time() + 0.5 or (book_source == self.last_book_source and ts < self.last_book_ts):
             return
         clean_bids = sorted(clean_bids, key=lambda x: x[0], reverse=True)[:20]
         clean_asks = sorted(clean_asks, key=lambda x: x[0])[:20]
         if not clean_bids or not clean_asks or clean_bids[0][0] >= clean_asks[0][0]:
             return
         self.bids, self.asks = clean_bids, clean_asks
-        self.last_book_ts = max(ts, self.last_book_ts)
+        self.last_book_ts = ts
+        self.last_book_source = book_source
 
     async def start(self) -> None:
         if self._running:
@@ -217,7 +220,7 @@ class MarketDataHub:
                     self.ingest_trade(event_ts, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
                 elif "depth20" in stream:
                     event_ts = self._parse_exchange_timestamp(data.get("E"), received_at)
-                    self.ingest_book(event_ts, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])])
+                    self.ingest_book(event_ts, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])], source="BINANCE_SPOT")
 
     @staticmethod
     def _coinbase_ticker_book(msg: dict):
@@ -246,7 +249,7 @@ class MarketDataHub:
                 elif msg.get("type") == "ticker":
                     parsed_book = self._coinbase_ticker_book(msg)
                     if parsed_book is not None:
-                        self.ingest_book(event_ts, parsed_book[0], parsed_book[1])
+                        self.ingest_book(event_ts, parsed_book[0], parsed_book[1], source="COINBASE_FALLBACK")
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
