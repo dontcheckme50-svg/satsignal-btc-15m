@@ -500,6 +500,17 @@ def test_feed_status_marks_future_timestamps_invalid():
     assert statuses["CF Benchmarks BRTI"] == "FUTURE_TIMESTAMP"
 
 
+def test_brti_without_source_timestamp_never_displays_as_live():
+    hub = MarketDataHub()
+    hub.brti_status = "LIVE"
+    hub.official_brti_price = 90000.0
+    hub.last_brti_ts = 0.0
+
+    statuses = {item.name: item.status for item in hub.get_feed_statuses()}
+
+    assert statuses["CF Benchmarks BRTI"] == "UNAVAILABLE"
+
+
 def test_ingest_trade_rejects_invalid_and_future_market_data():
     hub = MarketDataHub()
     now = time.time()
