@@ -129,8 +129,15 @@ class PredictorOrchestrator:
     def get_runtime_health(self) -> dict:
         now = time.time()
         cycle_age = None if self.last_cycle_success_ts is None else round(now - self.last_cycle_success_ts, 2)
+        if self.last_cycle_success_ts is None:
+            health = "DEGRADED" if self.consecutive_cycle_errors else "WARMING_UP"
+        elif self.consecutive_cycle_errors or cycle_age is None or cycle_age > 5.0:
+            health = "DEGRADED"
+        else:
+            health = "HEALTHY"
         return {
             "running": self._running,
+            "has_snapshot": self.latest_snapshot is not None,
             "last_cycle_started_ts": self.last_cycle_started_ts,
             "last_cycle_success_ts": self.last_cycle_success_ts,
             "last_cycle_age_seconds": cycle_age,
@@ -140,7 +147,7 @@ class PredictorOrchestrator:
             "total_cycle_errors": self.total_cycle_errors,
             "last_execution_error": self.last_execution_error,
             "last_settlement_error": self.last_settlement_error,
-            "health": "HEALTHY" if self.consecutive_cycle_errors == 0 and (cycle_age is None or cycle_age <= 5.0) else "DEGRADED",
+            "health": health,
         }
 
     async def run(self) -> None:
@@ -154,10 +161,15 @@ class PredictorOrchestrator:
                 # The prediction cycle is isolated: one exception must not terminate
                 # the long-lived background worker.
                 snap = self.evaluate_once(now=cycle_started)
-                self.last_cycle_success_ts = time.time()
-                self.last_cycle_duration_sec = round(self.last_cycle_success_ts - cycle_started, 4)
+                cycle_finished = time.time()
+                self.last_cycle_duration_sec = round(cycle_finished - cycle_started, 4)
                 self.last_cycle_error = None
                 self.consecutive_cycle_errors = 0
+                # A cycle without usable live market data is not a successful
+                # prediction snapshot. Keep the last true success timestamp so
+                # health can accurately transition to WARMING_UP or DEGRADED.
+                if snap is not None:
+                    self.last_cycle_success_ts = cycle_finished
             except Exception as exc:
                 self.last_cycle_error = f"{type(exc).__name__}: {exc}"
                 self.consecutive_cycle_errors += 1
