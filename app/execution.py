@@ -1,4 +1,4 @@
-import math
+import math, time
 from app.config import settings
 from app.database import PredictionLedger
 from app.feeds import MarketDataHub, iso_now
@@ -36,7 +36,12 @@ class ExecutionManager:
             return None
         if decision.signal == Signal.WAIT:
             return None
-        if contract.seconds_remaining < settings.final_lockout_seconds:
+        # Recompute against the actual wall clock; snapshot countdowns can be
+        # stale if the prediction/execution cycle was delayed.
+        execution_now = time.time()
+        if not (contract.open_timestamp <= execution_now < contract.close_timestamp):
+            return None
+        if (contract.close_timestamp - execution_now) < settings.final_lockout_seconds:
             return None
 
         sb = self.ledger.get_scoreboard()
@@ -51,8 +56,10 @@ class ExecutionManager:
         fair_prob = decision.up_probability if side == "YES" else decision.down_probability
         ask = contract.yes_ask_dollars if side == "YES" else contract.no_ask_dollars
 
-        # Never invent a fill price from the model's own probability.
-        if ask is None or not (0.01 <= ask <= 0.99):
+        # Validate model probability and market quote before fee/Kelly arithmetic.
+        if not math.isfinite(float(fair_prob)) or not (0.0 <= float(fair_prob) <= 1.0):
+            return None
+        if ask is None or not math.isfinite(float(ask)) or not (0.01 <= float(ask) <= 0.99):
             return None
 
         ask_price = round(float(ask), 2)
@@ -77,7 +84,7 @@ class ExecutionManager:
         rec = TradeRecord(
             mode="paper",
             contract_ticker=contract.ticker,
-            timestamp_iso=iso_now(now),
+            timestamp_iso=iso_now(execution_now),
             side=side,
             contracts=qty,
             entry_price=ask_price,
