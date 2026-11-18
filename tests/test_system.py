@@ -775,6 +775,36 @@ async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent
     assert max_active <= 3
 
 
+@pytest.mark.asyncio
+async def test_settlement_reconciliation_rotates_past_unsettled_oldest_batch(tmp_path, monkeypatch):
+    from app.orchestrator import PredictorOrchestrator
+
+    ledger = PredictionLedger(str(tmp_path / "settlement-rotation.db"))
+    tickers = [f"KXBTC15M-ROTATE-{i}" for i in range(7)]
+    for i, ticker in enumerate(tickers):
+        ledger.record_prediction(_prediction_record(ticker, ts=1794873600.0 + i))
+
+    hub = MarketDataHub()
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    calls = []
+
+    async def fake_verify(ticker):
+        calls.append(ticker)
+        # The first five are not settled yet; the last two have official outcomes.
+        return ("UP", None) if ticker in tickers[5:] else None
+
+    monkeypatch.setattr(hub, "fetch_verified_kalshi_settlement", fake_verify)
+
+    await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT")
+    assert calls == tickers[:5]
+    assert set(ledger.get_unsettled_contract_tickers()) == set(tickers)
+
+    calls.clear()
+    await orchestrator.reconcile_unsettled_contracts("KXBTC15M-CURRENT")
+
+    assert calls == tickers[5:] + tickers[:3]
+    assert set(ledger.get_unsettled_contract_tickers()) == set(tickers[:5])
+
 
 def test_exchange_timestamp_parser_handles_milliseconds_and_iso():
     hub = MarketDataHub()
