@@ -39,7 +39,7 @@ class VenueBook:
                 "age_seconds": round(age, 3) if age is not None else None, "last_trade_price": self.last_trade_price,
                 "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts else None,
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
-                "bid_depth": 0.0, "ask_depth": 0.0, "imbalance": None, "levels": 0,
+                "bid_depth": 0.0, "ask_depth": 0.0, "bid_depth_25bps": 0.0, "ask_depth_25bps": 0.0, "imbalance": None, "levels": 0,
                 "last_error": self.last_error, "reconnects": self.reconnects,
             }
         bid, bid_qty = bids[0]
@@ -54,7 +54,7 @@ class VenueBook:
             "last_trade_age_seconds": round(now - self.last_trade_ts, 3) if self.last_trade_ts else None,
             "bid": bid, "ask": ask, "mid": mid, "spread": ask - bid,
             "spread_bps": ((ask - bid) / mid * 10000.0) if mid else None,
-            "bid_depth": bid_depth, "ask_depth": ask_depth, "imbalance": imbalance,
+            "bid_depth": bid_depth, "ask_depth": ask_depth, "bid_depth_25bps": bid_depth_25bps, "ask_depth_25bps": ask_depth_25bps, "imbalance": imbalance,
             "top_bid_qty": bid_qty, "top_ask_qty": ask_qty, "levels": min(len(bids), len(asks)),
             "last_error": self.last_error, "reconnects": self.reconnects,
         }
@@ -194,7 +194,7 @@ class MultiExchangeReference:
             # Weight each accepted venue by usable quote depth, capped to prevent one venue dominating.
             weights = []
             for v in accepted:
-                depth = max(1.0, min(v["bid_depth"] + v["ask_depth"], 2_000_000.0))
+                depth = max(1.0, min(v["bid_depth_25bps"] + v["ask_depth_25bps"], 2_000_000.0))
                 weights.append(depth)
             if accepted:
                 composite = sum(v["mid"] * w for v, w in zip(accepted, weights)) / sum(weights)
