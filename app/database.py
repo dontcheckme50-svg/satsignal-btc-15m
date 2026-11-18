@@ -92,7 +92,8 @@ class PredictionLedger:
                     imbalance REAL,
                     ref_vs_primary_bps REAL,
                     ref_vs_brti_bps REAL,
-                    primary_vs_brti_bps REAL
+                    primary_vs_brti_bps REAL,
+                    reference_vs_strike_bps REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_pred_settled ON predictions(settled);
@@ -108,6 +109,8 @@ class PredictionLedger:
                 conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN primary_spot_age_seconds REAL")
             if "official_brti_age_seconds" not in reference_columns:
                 conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN official_brti_age_seconds REAL")
+            if "reference_vs_strike_bps" not in reference_columns:
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN reference_vs_strike_bps REAL")
 
 
     def record_multi_exchange_reference(self, epoch_ts: float, contract_ticker: str, strike_price: Optional[float], primary_spot_price: Optional[float], official_brti_price: Optional[float], snapshot: dict) -> int:
@@ -129,8 +132,8 @@ class PredictionLedger:
                     epoch_ts, contract_ticker, strike_price, primary_spot_price, primary_spot_age_seconds,
                     official_brti_price, official_brti_age_seconds, reference_price, reference_status, usd_venue_count, included_venues_json,
                     outlier_venues_json, venues_json, bid_depth_25bps, ask_depth_25bps, imbalance,
-                    ref_vs_primary_bps, ref_vs_brti_bps, primary_vs_brti_bps
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ref_vs_primary_bps, ref_vs_brti_bps, primary_vs_brti_bps, reference_vs_strike_bps
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     epoch_ts, contract_ticker, strike_price, primary_spot_price, snapshot.get("primary_spot_age_seconds"),
                     official_brti_price, snapshot.get("official_brti_age_seconds"), reference_price,
@@ -139,7 +142,7 @@ class PredictionLedger:
                     json.dumps(venue_details), snapshot.get("consolidated_bid_depth_usd_within_25bps"),
                     snapshot.get("consolidated_ask_depth_usd_within_25bps"), snapshot.get("consolidated_imbalance"),
                     bps(reference_price, primary_spot_price), bps(reference_price, official_brti_price),
-                    bps(primary_spot_price, official_brti_price),
+                    bps(primary_spot_price, official_brti_price), bps(reference_price, strike_price),
                 ),
             )
             return int(cur.lastrowid)
