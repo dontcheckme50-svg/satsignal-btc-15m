@@ -9,7 +9,7 @@ class EvidenceEngine:
     def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
-        recent_trades = [t for t in trades if now - 60.0 <= t[0] <= now]
+        recent_trades = [t for t in trades if contract.open_timestamp <= t[0] and now - 60.0 <= t[0] <= now]
         buy_vol_60s = sum(t[2] for t in recent_trades if not t[3])
         sell_vol_60s = sum(t[2] for t in recent_trades if t[3])
         tot_vol_60s = buy_vol_60s + sell_vol_60s
@@ -17,7 +17,7 @@ class EvidenceEngine:
         delta_60s = round(buy_vol_60s - sell_vol_60s, 4)
         # Only use observed trades within this contract and at/before the snapshot time.
         cvd = sum((t[2] if not t[3] else -t[2]) for t in trades if contract.open_timestamp <= t[0] <= now)
-        trades_10m = [t for t in trades if now - 600.0 <= t[0] <= now]
+        trades_10m = [t for t in trades if contract.open_timestamp <= t[0] and now - 600.0 <= t[0] <= now]
         # Normalize against the amount of observed history. A short startup
         # sample must not be divided by a full ten minutes and create a false
         # volume-spike signal.
@@ -37,7 +37,7 @@ class EvidenceEngine:
         # Only recent, source-observed bars may influence short-horizon signals.
         # Rebuild a one-second time series so sparse trade bars do not make
         # "last 30 observations" silently mean an arbitrary number of seconds.
-        valid_bars = [b for b in bars_1s if now - 300.0 <= b[0] <= now]
+        valid_bars = [b for b in bars_1s if contract.open_timestamp <= b[0] and now - 300.0 <= b[0] <= now]
         prices = self._resample_prices_to_seconds(valid_bars, now, live_price)
         rsi_14 = self._compute_rsi(prices[-60:], period=14)
         ann_vol = self._compute_annualized_vol(prices)
