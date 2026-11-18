@@ -928,6 +928,37 @@ async def test_prediction_loop_does_not_wait_for_settlement_worker(monkeypatch, 
 
 
 
+def test_stale_spot_feed_degrades_prediction_and_recovers_on_fresh_trade(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    hub = MarketDataHub()
+    hub.ingest_trade(now - settings.stale_feed_threshold_sec - 2.0, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = _contract(
+        open_timestamp=now - 10.0, close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub.last_kalshi_ts = now
+    orchestrator = PredictorOrchestrator(
+        hub, PredictionLedger(str(tmp_path / "spot-recovery.db"))
+    )
+
+    degraded = orchestrator.evaluate_once(now=now, record_to_db=False)
+    assert degraded is not None
+    assert degraded.weakness.feed_degraded is True
+    assert any("spot feed" in flag.lower() for flag in degraded.weakness.flags)
+    assert degraded.final.signal == Signal.WAIT
+
+    recovered_at = time.time()
+    hub.ingest_trade(recovered_at, 90012.0, 0.2, False, "BINANCE_SPOT")
+    recovered = orchestrator.evaluate_once(now=recovered_at, record_to_db=False)
+
+    assert recovered is not None
+    assert recovered.weakness.feed_degraded is False
+    assert not any("spot feed" in flag.lower() for flag in recovered.weakness.flags)
+
+
 def test_stale_order_book_is_excluded_and_degrades_prediction(tmp_path):
     from app.orchestrator import PredictorOrchestrator
 
