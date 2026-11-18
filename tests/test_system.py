@@ -1367,4 +1367,3 @@ async def test_settlement_reconciler_discovers_open_trade_without_prediction_loc
     trade = ledger.get_recent_trades(limit=1)[0]
     assert trade.status == "SETTLED"
     assert trade.pnl_usd == pytest.approx(0.79)
-\n
