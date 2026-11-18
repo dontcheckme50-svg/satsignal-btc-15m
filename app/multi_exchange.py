@@ -51,7 +51,7 @@ class VenueBook:
                 "delta_btc": round(delta, 8),
                 "delta_ratio": round(delta / classified_volume, 6) if classified_volume else None,
                 "classified_volume_btc": round(classified_volume, 8),
-                "status": "ACTIVE" if classified_volume > 0 else ("NO_TRADES" if recent else "QUIET"),
+                "status": "ACTIVE" if classified_volume > 0 else ("UNCLASSIFIED" if unknown_volume > 0 else "QUIET"),
             }
         return result
 
@@ -277,7 +277,7 @@ class MultiExchangeReference:
                 "delta_btc": round(delta, 8),
                 "delta_ratio": round(delta / classified, 6) if classified else None,
                 "classified_volume_btc": round(classified, 8),
-                "status": "ACTIVE" if classified > 0 else ("NO_TRADES" if count else "QUIET"),
+                "status": "ACTIVE" if classified > 0 else ("UNCLASSIFIED" if unknown > 0 else "QUIET"),
             }
         return aggregate
 
