@@ -158,6 +158,8 @@ class FinalDecisionEngine:
         confidence = round(max(up_prob, down_prob) * 100.0, 1)
         if weakness.feed_degraded:
             final_sig, rationale = Signal.WAIT, "WAIT: Live market feed is stale or degraded."
+        elif not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
+            final_sig, rationale = Signal.WAIT, "WAIT: Verified official Kalshi contract and strike unavailable; proxy contract is non-actionable."
         elif contract.seconds_remaining < settings.final_lockout_seconds:
             final_sig, rationale = Signal.WAIT, "WAIT: Final 65s settlement averaging window active; avoiding late entry."
         elif agreement == "CONFLICTED" and len(directional_votes) == 2:
