@@ -278,6 +278,52 @@ def test_fresh_official_brti_contributes_independent_strike_evidence():
     assert evidence.brti_conflict is False
 
 
+@pytest.mark.parametrize("brti_mode", ["fresh", "stale", "unavailable"])
+def test_orchestrator_only_passes_fresh_official_brti_to_evidence(monkeypatch, tmp_path, brti_mode):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = _contract(
+        open_timestamp=now - 10.0, close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub.last_kalshi_ts = now
+    if brti_mode != "unavailable":
+        hub.brti_status = "LIVE"
+        hub.official_brti_price = 90020.0
+        hub.last_brti_ts = (
+            now if brti_mode == "fresh"
+            else now - settings.stale_feed_threshold_sec - 1.0
+        )
+
+    orchestrator = PredictorOrchestrator(
+        hub, PredictionLedger(str(tmp_path / f"orchestrator-brti-{brti_mode}.db"))
+    )
+    captured = {}
+    original_analyze = orchestrator.evidence_engine.analyze
+
+    def capture_brti(*args, **kwargs):
+        captured["price"] = kwargs.get("official_brti_price")
+        captured["age"] = kwargs.get("official_brti_age_sec")
+        return original_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator.evidence_engine, "analyze", capture_brti)
+    snapshot = orchestrator.evaluate_once(now=now, record_to_db=False)
+
+    assert snapshot is not None
+    if brti_mode == "fresh":
+        assert captured["price"] == 90020.0
+        assert captured["age"] == pytest.approx(0.0)
+        assert snapshot.evidence.official_brti_price == 90020.0
+    else:
+        assert captured["price"] is None
+        assert captured["age"] is None
+        assert snapshot.evidence.official_brti_price is None
+
+
 def test_final_decision_uses_blended_official_brti_strike_evidence():
     from scipy.stats import norm
     from app.engines import FinalDecisionEngine
