@@ -143,3 +143,56 @@ def test_observations_do_not_inflate_scoreboard_and_lock_settles_once(tmp_path):
     assert sb.final_scored == 1
     assert sb.final_wins == 1
     assert sb.final_losses == 0
+
+
+def test_existing_snapshot_history_migrates_to_one_legacy_score_record(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "legacy-history.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_ticker TEXT NOT NULL,
+            timestamp_iso TEXT NOT NULL,
+            epoch_ts REAL NOT NULL,
+            strike_price REAL NOT NULL,
+            btc_price_at_pred REAL NOT NULL,
+            seconds_remaining REAL NOT NULL,
+            main_signal TEXT NOT NULL,
+            early_signal TEXT NOT NULL,
+            final_signal TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            up_prob REAL NOT NULL,
+            down_prob REAL NOT NULL,
+            regime TEXT NOT NULL,
+            settled INTEGER NOT NULL DEFAULT 0,
+            settlement_source TEXT,
+            settlement_price REAL,
+            actual_outcome TEXT,
+            final_won INTEGER,
+            main_won INTEGER,
+            early_won INTEGER
+        )
+    """)
+    for epoch, sig in [(100.0, "UP"), (130.0, "DOWN"), (160.0, "UP")]:
+        conn.execute(
+            """INSERT INTO predictions (contract_ticker, timestamp_iso, epoch_ts, strike_price,
+               btc_price_at_pred, seconds_remaining, main_signal, early_signal, final_signal,
+               confidence, up_prob, down_prob, regime, settled, actual_outcome, final_won)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("KXBTC15M-LEGACY", "2027-01-01 00:00:00", epoch, 90000.0, 90010.0,
+             500.0, sig, sig, sig, 70.0, 0.7, 0.3, "STABLE MARKET", 1, "UP", 1),
+        )
+    conn.commit()
+    conn.close()
+
+    ledger = PredictionLedger(db_path)
+    migrated = ledger.get_recent_predictions(limit=10)
+    assert len(migrated) == 1
+    assert migrated[0].epoch_ts == 160.0
+    assert migrated[0].is_official_lock is True
+    assert ledger.get_scoreboard().total_predictions == 1
+    with ledger._connection() as conn:
+        rows = conn.execute("SELECT COUNT(*) AS n FROM predictions WHERE is_official_lock = 0").fetchone()
+        assert rows["n"] == 2
