@@ -297,7 +297,7 @@ def test_unconfirmed_direction_at_final_lockout_becomes_wait(tmp_path):
 
     _evaluate_sequence(
         orchestrator, hub, contract.ticker, now,
-        [Signal.UP, Signal.UP], remaining=66.0,
+        [Signal.UP, Signal.WAIT], remaining=66.0,
     )
 
     records = ledger.get_recent_predictions()
