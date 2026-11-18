@@ -150,7 +150,17 @@ class RegimeEngine:
 class EarlyPredictionEngine:
     def analyze(self, ev: EvidenceMetrics, weakness: WeaknessReport, contract: ContractInfo) -> EarlyPredictionReport:
         in_early_window = max(0.0, 900.0 - contract.seconds_remaining) <= settings.early_window_seconds
-        z_strike = EvidenceEngine._strike_z_score(ev.live_price, contract.strike_price, contract.seconds_remaining, ev.volatility_annualized)
+        # Reuse the shared strike-distance evidence so Early and Final do not
+        # reason from different price benchmarks. Older observations without
+        # the optional field retain the original spot-only calculation.
+        z_strike = (
+            float(ev.strike_z_score)
+            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
+            else EvidenceEngine._strike_z_score(
+                ev.live_price, contract.strike_price,
+                contract.seconds_remaining, ev.volatility_annualized,
+            )
+        )
         early_logit = (0.85 * z_strike) + (0.65 * math.tanh(ev.cvd_contract / 4.0)) + (0.35 * ev.orderbook_imbalance)
         if weakness.absorption_detected: early_logit *= 0.45
         up_prob = round(float(np.clip(norm.cdf(early_logit), 0.05, 0.95)), 4)
