@@ -49,7 +49,7 @@ class ExecutionManager:
             return None
 
         # Only one paper entry per contract prevents repeated per-second orders.
-        if self.ledger.count_open_contracts_for_ticker(contract.ticker) > 0:
+        if self.ledger.count_trades_for_ticker(contract.ticker) > 0:
             return None
 
         side = "YES" if decision.signal == Signal.UP else "NO"
