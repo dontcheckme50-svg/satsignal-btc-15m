@@ -178,6 +178,21 @@ class PredictorOrchestrator:
             )
             self.last_logged_ts = ts
 
+        spot_side_at_lock = "UP" if live_price > new_contract.strike_price else "DOWN" if live_price < new_contract.strike_price else "AT_STRIKE"
+        brti_side_at_lock = (
+            "UP" if official_brti_price > new_contract.strike_price
+            else "DOWN" if official_brti_price < new_contract.strike_price
+            else "AT_STRIKE"
+        ) if official_brti_price is not None else None
+        if brti_side_at_lock is None:
+            brti_cohort = "BRTI_UNAVAILABLE"
+        elif "AT_STRIKE" in (spot_side_at_lock, brti_side_at_lock):
+            brti_cohort = "NEUTRAL"
+        elif spot_side_at_lock == brti_side_at_lock:
+            brti_cohort = f"AGREE_{spot_side_at_lock}"
+        else:
+            brti_cohort = "DISAGREE"
+
         # Official directional locks require two consecutive evaluations
         # agreeing on the same direction. WAIT, a reversal, or rollover resets
         # confirmation. At the final-entry cutoff, an unconfirmed direction
