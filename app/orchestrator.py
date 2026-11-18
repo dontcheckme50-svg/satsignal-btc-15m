@@ -74,7 +74,10 @@ class PredictorOrchestrator:
                     outcome, exp_val = verified
                     self.ledger.settle_contract(old_ticker, settlement_price=(exp_val if exp_val is not None else fallback_price), official_result=outcome, settlement_source="KALSHI_VERIFIED")
             else:
-                self.ledger.settle_contract(old_ticker, settlement_price=fallback_price, settlement_source="SPOT_CLOSE_PROXY")
+                # Synthetic contracts have no official settlement source and no
+                # captured close-price snapshot. Never grade them with a later
+                # contract's fallback price; leave them explicitly unsettled.
+                continue
 
     def evaluate_once(self, now: Optional[float] = None, record_to_db: bool = True) -> Optional[DashboardSnapshot]:
         ts = now if now is not None else time.time()
@@ -82,8 +85,8 @@ class PredictorOrchestrator:
         if live_price is None or live_price <= 0: return None
         new_contract = self._resolve_active_contract(ts, live_price)
         if self.active_contract is not None and new_contract.ticker != self.active_contract.ticker:
-            if not self.active_contract.ticker.startswith("KXBTC15M"):
-                self.ledger.settle_contract(self.active_contract.ticker, settlement_price=live_price, settlement_source="SPOT_CLOSE_PROXY")
+            # Do not settle a synthetic contract using a price from the next
+            # contract window. Synthetic contracts lack an official outcome.
             self.last_logged_ts = 0.0
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
