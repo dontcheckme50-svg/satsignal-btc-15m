@@ -1409,4 +1409,3 @@ def test_order_book_source_mismatch_degrades_and_recovers_prediction(tmp_path):
     statuses = {item.name: item.status for item in hub.get_feed_statuses()}
     assert statuses["Order Book Depth"] == "LIVE"
     assert recovered.weakness.feed_degraded is False
-\n
