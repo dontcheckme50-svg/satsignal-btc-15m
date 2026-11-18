@@ -188,3 +188,28 @@ async def test_binance_is_started_as_independent_shadow_worker(monkeypatch):
     assert "multi-binance" in names
     assert len(reference._tasks) == 4
     await reference.stop()
+
+
+def test_crossed_book_is_not_reported_live():
+    venue = VenueBook("TEST", "USD")
+    venue.bids = {102.0: 1.0}
+    venue.asks = {101.0: 1.0}
+    venue.last_book_ts = time.time()
+
+    snapshot = venue.snapshot()
+
+    assert snapshot["status"] == "INVALID"
+    assert snapshot["mid"] is None
+
+
+def test_two_venues_with_excessive_pairwise_disagreement_do_not_form_live_composite():
+    reference = MultiExchangeReference()
+    _book(reference.coinbase, 90000, 90010, 3.0)
+    _book(reference.kraken, 90600, 90610, 3.0)
+
+    snapshot = reference.get_snapshot()
+
+    assert snapshot["status"] == "PARTIAL"
+    assert snapshot["reference_price"] is None
+    assert snapshot["included_venues"] == []
+    assert set(snapshot["outlier_venues"]) == {"COINBASE", "KRAKEN"}
