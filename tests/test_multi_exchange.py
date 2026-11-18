@@ -76,3 +76,15 @@ def test_reference_uses_only_usd_venues_for_composite():
     assert set(snapshot["included_venues"]) == {"COINBASE", "KRAKEN"}
     assert snapshot["reference_age_seconds"] is not None
     assert snapshot["reference_timestamp"] is not None
+
+def test_near_market_depth_imbalance_uses_25bps_window():
+    venue = VenueBook("TEST", "USD")
+    venue.bids = {100.0: 2.0, 99.0: 10.0}
+    venue.asks = {101.0: 1.0, 102.0: 10.0}
+    venue.last_book_ts = time.time()
+
+    snapshot = venue.snapshot()
+
+    assert snapshot["bid_depth_25bps"] == 200.0
+    assert snapshot["ask_depth_25bps"] == 101.0
+    assert snapshot["imbalance"] > 0.0
