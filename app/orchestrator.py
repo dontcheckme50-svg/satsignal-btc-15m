@@ -283,6 +283,20 @@ class PredictorOrchestrator:
     def get_runtime_health(self) -> dict:
         now = time.time()
         cycle_age = None if self.last_cycle_success_ts is None else round(now - self.last_cycle_success_ts, 2)
+        # Worker liveness and market-data readiness are separate: a healthy
+        # loop can still be unable to make an actionable official-contract call.
+        spot_age = safe_age_seconds(self.hub.last_spot_ts, now)
+        book_age = safe_age_seconds(self.hub.last_book_ts, now)
+        kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, now)
+        spot_fresh = spot_age is not None and spot_age <= settings.stale_feed_threshold_sec
+        book_fresh = book_age is not None and book_age <= settings.stale_feed_threshold_sec
+        kalshi_fresh = kalshi_age is not None and kalshi_age <= 12.0
+        official_contract_active = bool(
+            self.active_contract is not None
+            and self.active_contract.is_official_kalshi
+            and self.active_contract.open_timestamp <= now < self.active_contract.close_timestamp
+        )
+        market_data_ready = bool(spot_fresh and book_fresh and kalshi_fresh and official_contract_active)
         if not self._running:
             health = "STOPPED"
         elif self.last_cycle_success_ts is None:
@@ -310,6 +324,13 @@ class PredictorOrchestrator:
             "last_execution_error": self.last_execution_error,
             "last_settlement_error": self.last_settlement_error,
             "settlement_reconciliation_running": bool(getattr(self, "_settlement_task", None) is not None and not getattr(self, "_settlement_task").done()),
+            "market_data_health": "READY" if market_data_ready else "DEGRADED",
+            "market_data_ready": market_data_ready,
+            "spot_age_seconds": None if spot_age is None else round(spot_age, 2),
+            "order_book_age_seconds": None if book_age is None else round(book_age, 2),
+            "kalshi_age_seconds": None if kalshi_age is None else round(kalshi_age, 2),
+            "official_contract_active": official_contract_active,
+            "official_brti_status": self.hub.brti_status,
             "health": health,
         }
 
