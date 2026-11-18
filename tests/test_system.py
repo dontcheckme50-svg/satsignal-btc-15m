@@ -704,3 +704,13 @@ def test_stale_order_book_is_excluded_and_degrades_prediction(tmp_path):
     assert any("order-book feed" in flag for flag in snapshot.weakness.flags)
     assert snapshot.evidence.orderbook_imbalance == 0.0
     assert snapshot.final.signal == Signal.WAIT
+
+
+
+def test_coinbase_primary_trade_side_flag_is_not_coerced():
+    hub = MarketDataHub()
+
+    assert hub._coinbase_is_buyer_maker("buy") is True
+    assert hub._coinbase_is_buyer_maker("sell") is False
+    assert hub._coinbase_is_buyer_maker(None) is None
+    assert hub._coinbase_is_buyer_maker("unknown") is None
