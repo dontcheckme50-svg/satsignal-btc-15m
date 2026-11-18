@@ -5,6 +5,7 @@ from pathlib import Path
 from app.config import settings
 from app.database import PredictionLedger
 from app.execution import ExecutionManager
+from app.engines import EvidenceEngine
 from app.feeds import MarketDataHub
 from fastapi.testclient import TestClient
 from app.main import app
@@ -244,3 +245,27 @@ async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp
     assert health["consecutive_cycle_errors"] == 1
     assert "injected cycle failure" in health["last_cycle_error"]
     assert health["health"] == "STOPPED"
+
+
+
+def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    trades = [
+        (now - 5.0, 90010.0, 0.3, False),  # buy within contract
+        (now - 3.0, 90009.0, 0.1, True),   # sell within contract
+        (now - 150.0, 89990.0, 4.0, False), # before this contract opened
+        (now + 1.0, 90020.0, 99.0, False), # future timestamp
+    ]
+    bars = [
+        (int(now - 20), 90000.0, 0.1),
+        (int(now + 20), 999999.0, 100.0),  # future bar must be ignored
+    ]
+
+    evidence = EvidenceEngine().analyze(
+        now, 90010.0, contract, trades, bars, [], []
+    )
+
+    assert evidence.trade_delta_60s == 0.2
+    assert evidence.cvd_contract == 0.2
+    assert evidence.buying_pressure_pct == 75.0
