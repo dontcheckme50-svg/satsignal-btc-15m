@@ -38,3 +38,12 @@ def test_multi_exchange_reference_history_persists_and_calculates_basis(tmp_path
     assert row["ref_vs_brti_bps"] == 2.2227
     assert row["included_venues"] == ["COINBASE", "KRAKEN", "BITSTAMP"]
     assert row["venues"][0]["venue"] == "COINBASE"
+
+def test_multi_exchange_history_api_returns_observations():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/multi-exchange/history?limit=10")
+    assert response.status_code == 200
+    assert "observations" in response.json()
