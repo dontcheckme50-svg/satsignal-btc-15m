@@ -7,7 +7,7 @@ from pathlib import Path
 from app.config import settings
 from app.database import PredictionLedger
 from app.execution import ExecutionManager
-from app.engines import EvidenceEngine
+from app.engines import EvidenceEngine, WeaknessEngine
 from app.feeds import MarketDataHub
 from fastapi.testclient import TestClient
 from app.main import app
