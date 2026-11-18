@@ -79,6 +79,10 @@ async def get_feeds():
 async def get_multi_exchange():
     return hub.get_multi_exchange_snapshot()
 
+@app.get("/api/multi-exchange/history")
+async def get_multi_exchange_history(limit: int = 200):
+    return {"observations": ledger.get_multi_exchange_reference_history(limit=limit)}
+
 @app.get("/api/history")
 async def get_history(limit: int = 50):
     return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
