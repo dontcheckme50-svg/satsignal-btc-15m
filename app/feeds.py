@@ -217,10 +217,21 @@ class MarketDataHub:
                 stream, data, received_at = payload.get("stream", ""), payload.get("data", {}), time.time()
                 if "aggTrade" in stream:
                     event_ts = self._parse_exchange_timestamp(data.get("T"), received_at)
-                    self.ingest_trade(event_ts, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
+                    # Binance maker flag must be a JSON boolean; never coerce a
+                    # malformed string/null into a BUY/SELL classification.
+                    self.ingest_trade(event_ts, float(data["p"]), float(data["q"]), data.get("m"), "BINANCE_SPOT")
                 elif "depth20" in stream:
                     event_ts = self._parse_exchange_timestamp(data.get("E"), received_at)
                     self.ingest_book(event_ts, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])], source="BINANCE_SPOT")
+
+    @staticmethod
+    def _coinbase_is_buyer_maker(side) -> Optional[bool]:
+        normalized = str(side or "").lower()
+        if normalized == "buy":
+            return True
+        if normalized == "sell":
+            return False
+        return None
 
     @staticmethod
     def _coinbase_ticker_book(msg: dict):
@@ -245,7 +256,9 @@ class MarketDataHub:
                 msg, received_at = json.loads(raw), time.time()
                 event_ts = self._parse_exchange_timestamp(msg.get("time"), received_at)
                 if msg.get("type") == "match":
-                    self.ingest_trade(event_ts, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
+                    maker_flag = self._coinbase_is_buyer_maker(msg.get("side"))
+                    if maker_flag is not None:
+                        self.ingest_trade(event_ts, float(msg["price"]), float(msg["size"]), maker_flag, "COINBASE_FALLBACK")
                 elif msg.get("type") == "ticker":
                     parsed_book = self._coinbase_ticker_book(msg)
                     if parsed_book is not None:
