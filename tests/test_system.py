@@ -1371,3 +1371,42 @@ async def test_settlement_reconciler_discovers_open_trade_without_prediction_loc
     trade = ledger.get_recent_trades(limit=1)[0]
     assert trade.status == "SETTLED"
     assert trade.pnl_usd == pytest.approx(0.79)
+
+def test_order_book_source_mismatch_degrades_and_recovers_prediction(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(
+        now, [(90009.0, 2.0)], [(90011.0, 2.0)], source="BINANCE_SPOT"
+    )
+    hub.kalshi_contract = _contract(
+        open_timestamp=now - 10.0,
+        close_timestamp=now + 800.0,
+        seconds_remaining=800.0,
+    )
+    hub.last_kalshi_ts = now
+
+    # Spot switches to Coinbase while the last fresh book still belongs to Binance.
+    hub.ingest_trade(now, 90012.0, 0.2, False, "COINBASE_FALLBACK")
+    statuses = {item.name: item.status for item in hub.get_feed_statuses()}
+    assert statuses["Order Book Depth"] == "SOURCE_MISMATCH"
+
+    orchestrator = PredictorOrchestrator(
+        hub, PredictionLedger(str(tmp_path / "source-mismatch.db"))
+    )
+    degraded = orchestrator.evaluate_once(now=now, record_to_db=False)
+    assert degraded.weakness.feed_degraded is True
+    assert any("source does not match" in flag.lower() for flag in degraded.weakness.flags)
+    assert degraded.final.signal == Signal.WAIT
+
+    # A fresh book from the active Coinbase source restores usable evidence.
+    hub.ingest_book(
+        now, [(90011.0, 2.0)], [(90013.0, 2.0)], source="COINBASE_FALLBACK"
+    )
+    recovered = orchestrator.evaluate_once(now=now, record_to_db=False)
+    statuses = {item.name: item.status for item in hub.get_feed_statuses()}
+    assert statuses["Order Book Depth"] == "LIVE"
+    assert recovered.weakness.feed_degraded is False
+\n
