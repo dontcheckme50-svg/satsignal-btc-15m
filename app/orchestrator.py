@@ -133,7 +133,13 @@ class PredictorOrchestrator:
             health = "STOPPED"
         elif self.last_cycle_success_ts is None:
             health = "DEGRADED" if self.consecutive_cycle_errors else "WARMING_UP"
-        elif self.consecutive_cycle_errors or cycle_age is None or cycle_age > 5.0:
+        elif (
+            self.consecutive_cycle_errors
+            or self.last_execution_error
+            or self.last_settlement_error
+            or cycle_age is None
+            or cycle_age > 5.0
+        ):
             health = "DEGRADED"
         else:
             health = "HEALTHY"
