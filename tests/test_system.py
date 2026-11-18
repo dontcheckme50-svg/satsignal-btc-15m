@@ -322,6 +322,7 @@ def test_ingest_book_rejects_crossed_invalid_and_future_books():
 
 @pytest.mark.asyncio
 async def test_synthetic_contracts_are_not_settled_with_later_fallback_price(tmp_path):
+    from app.orchestrator import PredictorOrchestrator
     ledger = PredictionLedger(str(tmp_path / "synthetic-unsettled.db"))
     ledger.record_prediction(_prediction_record("SYNTH-BTC15M-OLD"))
     orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
