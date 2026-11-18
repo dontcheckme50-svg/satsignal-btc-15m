@@ -27,3 +27,12 @@ def test_history_api_limits_are_bounded():
     assert client.get("/api/multi-exchange/history?limit=1001").status_code == 422
     assert client.get("/api/history?limit=501").status_code == 422
     assert client.get("/api/trades?limit=201").status_code == 422
+
+
+
+def test_dashboard_exposes_individual_venue_health():
+    from app.main import DASHBOARD_HTML
+
+    assert 'id="mx-venue-health"' in DASHBOARD_HTML
+    assert 'v.status' in DASHBOARD_HTML
+    assert 'v.age_seconds' in DASHBOARD_HTML
