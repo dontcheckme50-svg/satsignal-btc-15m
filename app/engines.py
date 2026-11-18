@@ -130,11 +130,19 @@ class EvidenceEngine:
         return (math.log(spot / strike) / denom) if denom > 1e-8 else 0.0
 
 class WeaknessEngine:
-    def analyze(self, ev: EvidenceMetrics, spot_age_sec: Optional[float], book_age_sec: Optional[float] = None) -> WeaknessReport:
+    def analyze(
+        self,
+        ev: EvidenceMetrics,
+        spot_age_sec: Optional[float],
+        book_age_sec: Optional[float] = None,
+        book_source_matches: bool = True,
+    ) -> WeaknessReport:
         flags, penalty, absorption, vol_div, mom_fade, feed_bad = [], 0.0, False, False, False, False
         if spot_age_sec is None or spot_age_sec > settings.stale_feed_threshold_sec:
             feed_bad = True; penalty += 50.0; flags.append(f"Delayed or missing spot feed ({spot_age_sec}s old)")
-        if book_age_sec is None or book_age_sec > settings.stale_feed_threshold_sec:
+        if not book_source_matches:
+            feed_bad = True; penalty += 25.0; flags.append("Order-book source does not match the active spot feed")
+        elif book_age_sec is None or book_age_sec > settings.stale_feed_threshold_sec:
             feed_bad = True; penalty += 25.0; flags.append(f"Delayed or missing order-book feed ({book_age_sec}s old)")
         if ev.brti_conflict:
             penalty += 20.0; flags.append("Official BRTI and spot are on opposite sides of the Kalshi strike")
