@@ -123,6 +123,7 @@ class PredictionLedger:
                 "mid": v.get("mid"), "spread_bps": v.get("spread_bps"),
                 "imbalance": v.get("imbalance"), "bid_depth_25bps": v.get("bid_depth_25bps"),
                 "ask_depth_25bps": v.get("ask_depth_25bps"), "age_seconds": v.get("age_seconds"),
+                "trade_flow": v.get("trade_flow"),
             }
             for v in snapshot.get("venues", [])
         ]
