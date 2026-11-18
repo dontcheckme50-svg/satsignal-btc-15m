@@ -46,6 +46,17 @@ def _decision(signal=Signal.UP, up=0.95, down=0.05):
     )
 
 
+def _fresh_execution_hub(contract):
+    hub = MarketDataHub()
+    now = time.time()
+    hub.live_price = 90010.0
+    hub.last_spot_ts = now
+    hub.active_spot_source = "TEST_LIVE"
+    hub.last_kalshi_ts = now
+    hub.kalshi_contract = contract
+    return hub
+
+
 def test_paper_mode_is_forced():
     assert settings.trading_mode == "paper"
 
@@ -89,9 +100,9 @@ def test_execution_refuses_synthetic_contract(tmp_path):
 
 def test_execution_requires_real_kalshi_ask(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "ledger.db"))
-    hub = MarketDataHub()
-    manager = ExecutionManager(hub, ledger)
     no_quote = _contract(yes_ask_dollars=None)
+    hub = _fresh_execution_hub(no_quote)
+    manager = ExecutionManager(hub, ledger)
     import asyncio
     result = asyncio.run(manager.evaluate_and_execute(time.time(), no_quote, _decision()))
     assert result is None
@@ -100,9 +111,9 @@ def test_execution_requires_real_kalshi_ask(tmp_path):
 
 def test_execution_places_at_most_one_paper_trade_per_contract(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "ledger.db"))
-    hub = MarketDataHub()
-    manager = ExecutionManager(hub, ledger)
     contract = _contract()
+    hub = _fresh_execution_hub(contract)
+    manager = ExecutionManager(hub, ledger)
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
     second = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
@@ -558,14 +569,14 @@ def test_order_book_source_switch_allows_timestamp_offset():
 
 def test_execution_rechecks_actual_contract_expiration_not_snapshot_countdown(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "execution-expiry.db"))
-    hub = MarketDataHub()
-    manager = ExecutionManager(hub, ledger)
     now = time.time()
     stale_countdown = _contract(
         open_timestamp=now - 100.0,
         close_timestamp=now + 20.0,
         seconds_remaining=800.0,
     )
+    hub = _fresh_execution_hub(stale_countdown)
+    manager = ExecutionManager(hub, ledger)
 
     import asyncio
     result = asyncio.run(manager.evaluate_and_execute(now, stale_countdown, _decision()))
@@ -576,7 +587,8 @@ def test_execution_rechecks_actual_contract_expiration_not_snapshot_countdown(tm
 
 def test_execution_rejects_nonfinite_model_probability(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "execution-probability.db"))
-    manager = ExecutionManager(MarketDataHub(), ledger)
+    contract = _contract()
+    manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
     bad_probability = _decision(up=float("nan"), down=0.05)
 
     import asyncio
@@ -589,8 +601,8 @@ def test_execution_rejects_nonfinite_model_probability(tmp_path):
 
 def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "one-entry-per-contract.db"))
-    manager = ExecutionManager(MarketDataHub(), ledger)
     contract = _contract()
+    manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
 
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
