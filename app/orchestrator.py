@@ -165,13 +165,13 @@ class PredictorOrchestrator:
                 snap = self.evaluate_once(now=cycle_started)
                 cycle_finished = time.time()
                 self.last_cycle_duration_sec = round(cycle_finished - cycle_started, 4)
-                self.last_cycle_error = None
-                self.consecutive_cycle_errors = 0
                 # A cycle without usable live market data is not a successful
-                # prediction snapshot. Keep the last true success timestamp so
+                # prediction snapshot. Keep the last true success/error state so
                 # health can accurately transition to WARMING_UP or DEGRADED.
                 if snap is not None:
                     self.last_cycle_success_ts = cycle_finished
+                    self.last_cycle_error = None
+                    self.consecutive_cycle_errors = 0
             except Exception as exc:
                 self.last_cycle_error = f"{type(exc).__name__}: {exc}"
                 self.consecutive_cycle_errors += 1
