@@ -44,7 +44,7 @@ Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_
 - Binance aggregate trades and depth stream are primary.
 - Coinbase WebSocket is fallback; its fallback order book is top-of-book only, not 20 levels.
 - Kalshi polling accepts only currently active KXBTC15M markets with a valid official `floor_strike`.
-- BRTI polling is an optional authenticated integration attempt. It is displayed as a feed status but is not currently incorporated into five-engine scoring. Validate endpoint, entitlement and payload before relying on it.
+- Official CF Benchmarks BRTI is accepted only from a valid, source-timestamped, fresh Kalshi pass-through response. The documented CF payload array is parsed using its source event time; stale, future-dated, malformed, and repeat-of-previous values are excluded. When fresh, BRTI contributes an independent 35% component to the Evidence Engine's strike-distance Z-score while primary spot retains 65%; a material spot/BRTI disagreement across the Kalshi strike adds a weakness penalty. BRTI is never replaced by Binance or another exchange. Missing entitlement leaves the BRTI component inactive rather than fabricating a value.
 
 ## Multi-exchange reference (shadow mode)
 
