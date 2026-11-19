@@ -36,12 +36,27 @@ class ExecutionManager:
             return None
         if decision.signal == Signal.WAIT:
             return None
+        # A prediction snapshot can be delayed across a 15-minute rollover.
+        # Require the live feed's current contract to match the complete identity
+        # of the snapshot before considering a paper entry.
+        active_market = self.hub.kalshi_contract
+        if (
+            active_market is None
+            or active_market.ticker != contract.ticker
+            or active_market.open_timestamp != contract.open_timestamp
+            or active_market.close_timestamp != contract.close_timestamp
+            or active_market.strike_price != contract.strike_price
+            or not active_market.is_official_kalshi
+            or active_market.strike_source != "KALSHI_OFFICIAL"
+        ):
+            return None
+
         # Recompute against the actual wall clock; snapshot countdowns can be
         # stale if the prediction/execution cycle was delayed.
         execution_now = time.time()
-        if not (contract.open_timestamp <= execution_now < contract.close_timestamp):
+        if not (active_market.open_timestamp <= execution_now < active_market.close_timestamp):
             return None
-        if (contract.close_timestamp - execution_now) < settings.final_lockout_seconds:
+        if (active_market.close_timestamp - execution_now) < settings.final_lockout_seconds:
             return None
         spot_age = safe_age_seconds(self.hub.last_spot_ts, execution_now)
         kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, execution_now)
@@ -62,10 +77,6 @@ class ExecutionManager:
             return None
         if kalshi_age is None or kalshi_age > 12.0:
             return None
-        active_market = self.hub.kalshi_contract
-        if active_market is None or active_market.ticker != contract.ticker:
-            return None
-
         sb = self.ledger.get_scoreboard()
         if sb.daily_loss_locked:
             return None
@@ -76,7 +87,8 @@ class ExecutionManager:
 
         side = "YES" if decision.signal == Signal.UP else "NO"
         fair_prob = decision.up_probability if side == "YES" else decision.down_probability
-        ask = contract.yes_ask_dollars if side == "YES" else contract.no_ask_dollars
+        # Price from the freshest live quote, not the possibly older snapshot.
+        ask = active_market.yes_ask_dollars if side == "YES" else active_market.no_ask_dollars
 
         # Validate model probability and market quote before fee/Kelly arithmetic.
         if not math.isfinite(float(fair_prob)) or not (0.0 <= float(fair_prob) <= 1.0):
