@@ -37,7 +37,7 @@ jobs:
       - name: Run connectivity probe unit tests
         run: python -m pytest -q tests/test_postgres_connection_probe.py
       - name: Test Supabase PostgreSQL login (read-only)
-        if: ${{ secrets.SUPABASE_DATABASE_URL != '' }}
+        if: ${{ env.SUPABASE_DATABASE_URL != '' }}
         env:
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
         run: python scripts/check_postgres_connection.py
