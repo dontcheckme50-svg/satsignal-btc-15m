@@ -1,4 +1,4 @@
-import asyncio, time
+import asyncio, time, os
 from contextlib import asynccontextmanager
 from typing import Optional, Set
 import uvicorn
@@ -6,12 +6,16 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from app.config import settings, storage_mount_status, persistent_storage_required
 from app.database import PredictionLedger
+from app.postgres_database import PostgresPredictionLedger
 from app.feeds import MarketDataHub, iso_now
 from app.models import DashboardSnapshot
 from app.orchestrator import PredictorOrchestrator
 
 hub = MarketDataHub()
-ledger = PredictionLedger(settings.db_path)
+if os.getenv("SATSIGNAL_STORAGE_BACKEND", "sqlite").strip().lower() == "postgres":
+    ledger = PostgresPredictionLedger(os.getenv("SUPABASE_DATABASE_URL", ""))
+else:
+    ledger = PredictionLedger(settings.db_path)
 orchestrator = PredictorOrchestrator(hub, ledger)
 active_clients: Set[WebSocket] = set()
 START_TIME = time.time()
