@@ -611,3 +611,50 @@ def test_contract_scoped_trade_flow_excludes_previous_contract_activity():
     assert flow_900s["buy_volume_btc"] == 0.5
     assert flow_900s["sell_volume_btc"] == 0.25
     assert flow_900s["trade_count"] == 2
+
+
+def test_out_of_order_recovered_trade_cannot_roll_latest_venue_price_back():
+    venue = VenueBook("TEST", "USD")
+    newer_ts = time.time() - 1.0
+    older_ts = newer_ts - 30.0
+
+    assert venue.ingest_trade(newer_ts, 91000.0, 0.1, "buy") is True
+    assert venue.ingest_trade(older_ts, 90000.0, 0.2, "sell") is True
+
+    assert venue.last_trade_ts == newer_ts
+    assert venue.last_trade_price == 91000.0
+
+
+@pytest.mark.asyncio
+async def test_binance_shadow_trade_uses_exchange_event_timestamp(monkeypatch):
+    reference = MultiExchangeReference()
+    reference._running = True
+    source_ts = time.time() - 2.0
+    frame = {
+        "stream": "btcusdt@aggTrade",
+        "data": {"p": "90000", "q": "0.15", "m": False, "T": int(source_ts * 1000)},
+    }
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def messages():
+                yield multi_exchange_module.json.dumps(frame)
+                reference._running = False
+            return messages()
+
+    monkeypatch.setattr(
+        multi_exchange_module.websockets, "connect",
+        lambda *args, **kwargs: FakeWebSocket(),
+    )
+
+    await reference._binance_loop()
+
+    assert len(reference.binance.trades) == 1
+    assert reference.binance.trades[0][0] == pytest.approx(source_ts, abs=0.01)
+    assert reference.binance.last_trade_ts == pytest.approx(source_ts, abs=0.01)
