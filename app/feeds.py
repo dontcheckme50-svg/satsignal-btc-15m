@@ -193,8 +193,8 @@ class MarketDataHub:
             runtime["state"] = "STOPPED"
         await self.multi_exchange.stop()
 
-    def get_multi_exchange_snapshot(self) -> dict:
-        snapshot = self.multi_exchange.get_snapshot()
+    def get_multi_exchange_snapshot(self, contract_open_ts: Optional[float] = None) -> dict:
+        snapshot = self.multi_exchange.get_snapshot(since_ts=contract_open_ts)
         now = time.time()
         primary_age = safe_age_seconds(self.last_spot_ts, now)
         brti_age = safe_age_seconds(self.last_brti_ts, now)
