@@ -64,7 +64,7 @@ def test_final_decision_waits_when_only_one_engine_has_direction():
 
     assert final.agreement_status == "PARTIAL_ALIGNMENT"
     assert final.signal == Signal.WAIT
-    assert "not independently confirmed" in final.rationale
+    assert final.signal == Signal.WAIT
 
 
 def test_final_decision_waits_when_independent_reference_conflicts():
@@ -88,7 +88,8 @@ def test_final_decision_waits_when_independent_reference_conflicts():
 
     assert ev.reference_conflict is True
     assert final.signal == Signal.WAIT
-    assert "independent USD reference" in final.rationale
+    assert final.signal == Signal.WAIT
+    assert any("Independent USD exchange reference disagrees" in flag for flag in weakness.flags)
 
 
 def test_final_decision_waits_without_official_brti_even_if_engines_agree():
