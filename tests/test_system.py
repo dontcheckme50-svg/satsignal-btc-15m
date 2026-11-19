@@ -1714,7 +1714,11 @@ def test_execution_rejects_delayed_snapshot_after_contract_rollover(tmp_path):
 def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
     ledger = PredictionLedger(str(tmp_path / "execution-live-quote.db"))
     snapshot_contract = _contract(yes_ask_dollars=0.80)
-    live_contract = _contract(yes_ask_dollars=0.20)
+    live_contract = _contract(
+        yes_ask_dollars=0.20,
+        open_timestamp=snapshot_contract.open_timestamp,
+        close_timestamp=snapshot_contract.close_timestamp,
+    )
     hub = _fresh_execution_hub(live_contract)
     manager = ExecutionManager(hub, ledger)
 
