@@ -26,6 +26,7 @@ class PredictorOrchestrator:
         self._directional_lock_candidate_ticker: Optional[str] = None
         self._directional_lock_candidate: Signal = Signal.WAIT
         self._directional_lock_candidate_count: int = 0
+        self._directional_lock_candidate_first_ts: Optional[float] = None
         self.last_logged_ts: float = 0.0
         self.last_multi_exchange_logged_ts: float = 0.0
         self.latest_snapshot: Optional[DashboardSnapshot] = None
@@ -51,6 +52,7 @@ class PredictorOrchestrator:
         self._directional_lock_candidate_ticker = None
         self._directional_lock_candidate = Signal.WAIT
         self._directional_lock_candidate_count = 0
+        self._directional_lock_candidate_first_ts = None
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -259,6 +261,7 @@ class PredictorOrchestrator:
                     self._directional_lock_candidate_ticker = new_contract.ticker
                     self._directional_lock_candidate = final.signal
                     self._directional_lock_candidate_count = 1
+                    self._directional_lock_candidate_first_ts = ts
             else:
                 self._reset_directional_lock_candidate()
 
@@ -268,6 +271,8 @@ class PredictorOrchestrator:
                 and self._directional_lock_candidate_ticker == new_contract.ticker
                 and self._directional_lock_candidate in (Signal.UP, Signal.DOWN)
                 and self._directional_lock_candidate_count >= 2
+                and self._directional_lock_candidate_first_ts is not None
+                and ts - self._directional_lock_candidate_first_ts >= 1.0
                 and final.signal == self._directional_lock_candidate
             )
             at_final_lockout = new_contract.seconds_remaining <= settings.final_lockout_seconds
