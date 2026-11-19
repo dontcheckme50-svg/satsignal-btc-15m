@@ -375,9 +375,8 @@ def test_final_decision_uses_blended_official_brti_strike_evidence():
     assert final.up_probability == expected_probability
 
 
-def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
+def test_early_prediction_is_independent_of_blended_brti_strike_probability():
     from app.models import WeaknessReport
-    from scipy.stats import norm
 
     now = 1_000_000.0
     contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
@@ -386,11 +385,16 @@ def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
         official_brti_price=89980.0, official_brti_age_sec=0.5,
     )
     weakness = WeaknessReport(weakness_score=0.0)
-    early = EarlyPredictionEngine().analyze(evidence, weakness, contract)
-    expected_logit = 0.85 * evidence.strike_z_score
-    expected_up_probability = round(float(norm.cdf(expected_logit)), 4)
+    bullish_strike = evidence.model_copy(update={"strike_z_score": 2.5})
+    bearish_strike = evidence.model_copy(update={"strike_z_score": -2.5})
 
-    assert early.up_prob == expected_up_probability
+    early_bullish = EarlyPredictionEngine().analyze(bullish_strike, weakness, contract)
+    early_bearish = EarlyPredictionEngine().analyze(bearish_strike, weakness, contract)
+
+    # Strike/BRTI location belongs to the final probability model; it must not
+    # be counted again by the independent early tape/flow model.
+    assert early_bullish.up_prob == early_bearish.up_prob
+    assert early_bullish.down_prob == early_bearish.down_prob
 
 
 def test_brti_spot_strike_conflict_is_flagged_as_weakness():

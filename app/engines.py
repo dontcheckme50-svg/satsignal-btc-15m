@@ -72,7 +72,15 @@ class EvidenceEngine:
             and abs(dist / contract.strike_price * 10000.0) >= 0.5
             and abs(float(brti_distance) / contract.strike_price * 10000.0) >= 0.5
         )
-        raw_score = float(np.clip(((buy_pct - 50.0) / 50.0) * 30.0 + (0.65 * obi + 0.35 * large_bias) * 25.0 + (mom_score / 100.0) * 25.0 + float(np.clip(strike_z * 12.0, -20.0, 20.0)), -100.0, 100.0))
+        # Evidence raw_score is deliberately tape/microstructure-only.
+        # Strike distance (including official BRTI) is supplied separately to
+        # FinalDecisionEngine; mixing it here would count location twice.
+        raw_score = float(np.clip(
+            ((buy_pct - 50.0) / 50.0) * 30.0
+            + (0.65 * obi + 0.35 * large_bias) * 25.0
+            + (mom_score / 100.0) * 25.0,
+            -80.0, 80.0,
+        ))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
         return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6))
 
@@ -181,29 +189,55 @@ class RegimeEngine:
 class EarlyPredictionEngine:
     def analyze(self, ev: EvidenceMetrics, weakness: WeaknessReport, contract: ContractInfo) -> EarlyPredictionReport:
         in_early_window = max(0.0, 900.0 - contract.seconds_remaining) <= settings.early_window_seconds
-        # Reuse the shared strike-distance evidence so Early and Final do not
-        # reason from different price benchmarks. Older observations without
-        # the optional field retain the original spot-only calculation.
-        z_strike = (
-            float(ev.strike_z_score)
-            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
-            else EvidenceEngine._strike_z_score(
-                ev.live_price, contract.strike_price,
-                contract.seconds_remaining, ev.volatility_annualized,
-            )
+
+        # This engine is intentionally independent of strike-distance probability.
+        # FinalDecisionEngine already models distance-to-strike; reusing it here
+        # would count the same price-location evidence twice and inflate confidence.
+        # Use only short-horizon tape, momentum, order-book and structure evidence.
+        delta_scale = max(0.75, abs(ev.trade_delta_60s) + 0.75)
+        flow_component = math.tanh(ev.trade_delta_60s / delta_scale)
+        pressure_component = (ev.buying_pressure_pct - ev.selling_pressure_pct) / 100.0
+        momentum_component = float(np.clip(ev.momentum_score / 100.0, -1.0, 1.0))
+        structure_component = (
+            1.0 if ev.structure_bias == "BULLISH_HH_HL"
+            else -1.0 if ev.structure_bias == "BEARISH_LH_LL"
+            else 0.0
         )
-        early_logit = (0.85 * z_strike) + (0.65 * math.tanh(ev.cvd_contract / 4.0)) + (0.35 * ev.orderbook_imbalance)
-        if weakness.absorption_detected: early_logit *= 0.45
+        # Keep the model bounded and symmetric so absent/neutral evidence cannot
+        # create a default UP bias.
+        early_logit = (
+            0.55 * flow_component
+            + 0.35 * pressure_component
+            + 0.40 * momentum_component
+            + 0.20 * structure_component
+            + 0.20 * float(np.clip(ev.orderbook_imbalance, -1.0, 1.0))
+        )
+        if weakness.absorption_detected:
+            early_logit *= 0.45
+        if weakness.momentum_fading:
+            early_logit *= 0.70
+        penalty_factor = 1.0 - min(0.65, max(0.0, weakness.weakness_score) / 140.0)
+        early_logit *= penalty_factor
+
         up_prob = round(float(np.clip(norm.cdf(early_logit), 0.05, 0.95)), 4)
         down_prob = round(1.0 - up_prob, 4)
-        confidence = round(max(50.0, (max(up_prob, down_prob) * 100.0) - (weakness.weakness_score * 0.15)), 1)
+        confidence = round(max(up_prob, down_prob) * 100.0, 1)
         if weakness.feed_degraded or confidence < 55.0:
-            sig, rationale = Signal.WAIT, "Early window lacks clean opening impulse or strike separation."
+            sig, rationale = Signal.WAIT, "Early flow evidence is weak or market feeds are degraded."
         elif up_prob > 0.5:
-            sig, rationale = Signal.UP, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor upside."
+            sig, rationale = Signal.UP, (
+                f"Independent early tape evidence favors upside "
+                f"(60s delta {ev.trade_delta_60s:+.3f}, momentum {ev.momentum_score:+.1f})."
+            )
         else:
-            sig, rationale = Signal.DOWN, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor downside."
-        return EarlyPredictionReport(active_window=in_early_window, signal=sig, confidence=confidence, up_prob=up_prob, down_prob=down_prob, rationale=rationale)
+            sig, rationale = Signal.DOWN, (
+                f"Independent early tape evidence favors downside "
+                f"(60s delta {ev.trade_delta_60s:+.3f}, momentum {ev.momentum_score:+.1f})."
+            )
+        return EarlyPredictionReport(
+            active_window=in_early_window, signal=sig, confidence=confidence,
+            up_prob=up_prob, down_prob=down_prob, rationale=rationale
+        )
 
 class FinalDecisionEngine:
     def decide(self, ev: EvidenceMetrics, weakness: WeaknessReport, regime: RegimeReport, early: EarlyPredictionReport, contract: ContractInfo, weights: dict) -> FinalDecisionReport:
@@ -218,10 +252,23 @@ class FinalDecisionEngine:
                 contract.seconds_remaining, ev.volatility_annualized,
             )
         )
-        micro_drift_z = ((ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)) + ((early.up_prob - 0.5) * 0.45 * weights.get("early", 1.0))
+        # Probability receives one tape-derived microstructure adjustment.
+        # Early is retained as an independent directional confirmation/veto,
+        # not added again as a second copy of the same flow evidence.
+        micro_drift_z = (ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)
         raw_up_prob = float(np.clip(norm.cdf(z_terminal + micro_drift_z), 0.02, 0.98))
         shrink = min(0.70, weakness.weakness_score / 130.0)
         up_prob = round(0.5 + (raw_up_prob - 0.5) * (1.0 - shrink), 4)
+
+        # Apply a conservative Platt calibrator fitted only from settled
+        # directional locks. Until the ledger has enough outcomes, the
+        # database supplies the identity transform (slope=1, intercept=0).
+        calibration_slope = float(np.clip(weights.get("calibration_slope", 1.0), 0.25, 2.5))
+        calibration_intercept = float(np.clip(weights.get("calibration_intercept", 0.0), -1.0, 1.0))
+        clipped_prob = float(np.clip(up_prob, 0.02, 0.98))
+        probability_logit = math.log(clipped_prob / (1.0 - clipped_prob))
+        calibrated_logit = calibration_intercept + calibration_slope * probability_logit
+        up_prob = round(float(1.0 / (1.0 + math.exp(-float(np.clip(calibrated_logit, -12.0, 12.0))))), 4)
         down_prob = round(1.0 - up_prob, 4)
         directional_votes = [s for s in (ev.signal, early.signal) if s != Signal.WAIT]
         details: List[str] = []

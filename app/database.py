@@ -1,4 +1,5 @@
-import os, sqlite3, json, math
+import os, sqlite3, json, math, time
+import numpy as np
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -8,6 +9,8 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._engine_weights_cache = None
+        self._engine_weights_cache_ts = 0.0
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -568,8 +571,71 @@ class PredictionLedger:
             )
 
     def get_engine_weights(self) -> Dict[str, float]:
+        """Return cached engine weights and a settled-outcome probability calibrator.
+
+        Calibration is refreshed every 30 seconds rather than on every one-second
+        prediction cycle, keeping database reads and fitting work bounded.
+        """
+        now = time.monotonic()
+        if self._engine_weights_cache is not None and now - self._engine_weights_cache_ts < 30.0:
+            return dict(self._engine_weights_cache)
+
         sb = self.get_scoreboard()
-        if sb.total_settled < 15:
-            return {"evidence": 1.0, "early": 1.0}
-        return {"evidence": round(max(0.6, min(1.4, sb.main_accuracy_pct / 52.0)), 3),
-                "early": round(max(0.6, min(1.4, sb.early_accuracy_pct / 52.0)), 3)}
+        weights = {
+            "evidence": 1.0,
+            "early": 1.0,
+            "calibration_slope": 1.0,
+            "calibration_intercept": 0.0,
+            "calibration_samples": 0,
+        }
+        if sb.total_settled >= 15:
+            weights["evidence"] = round(max(0.6, min(1.4, sb.main_accuracy_pct / 52.0)), 3)
+            weights["early"] = round(max(0.6, min(1.4, sb.early_accuracy_pct / 52.0)), 3)
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT up_prob, actual_outcome FROM predictions
+                   WHERE settled = 1 AND is_official_lock = 1
+                     AND final_signal IN ('UP', 'DOWN')
+                     AND actual_outcome IN ('UP', 'DOWN')
+                   ORDER BY epoch_ts DESC LIMIT 500"""
+            ).fetchall()
+        if len(rows) < 30:
+            self._engine_weights_cache = dict(weights)
+            self._engine_weights_cache_ts = now
+            return weights
+
+        # Fit a regularized two-parameter logistic calibration:
+        # calibrated_logit = intercept + slope * logit(model_probability).
+        # The prior (slope=1, intercept=0) prevents small samples from
+        # producing extreme corrections.
+        x = np.array([
+            math.log(
+                min(0.98, max(0.02, float(row["up_prob"]))) /
+                (1.0 - min(0.98, max(0.02, float(row["up_prob"]))))
+            )
+            for row in rows
+        ], dtype=float)
+        y = np.array([1.0 if row["actual_outcome"] == "UP" else 0.0 for row in rows], dtype=float)
+        beta = np.array([0.0, 1.0], dtype=float)  # intercept, slope
+        ridge = 5.0
+        for _ in range(40):
+            z = np.clip(beta[0] + beta[1] * x, -12.0, 12.0)
+            pred = 1.0 / (1.0 + np.exp(-z))
+            variance = np.maximum(pred * (1.0 - pred), 1e-6)
+            design = np.column_stack((np.ones_like(x), x))
+            gradient = design.T @ (pred - y) + ridge * np.array([beta[0], beta[1] - 1.0])
+            hessian = (design.T * variance) @ design + ridge * np.eye(2)
+            try:
+                step = np.linalg.solve(hessian, gradient)
+            except np.linalg.LinAlgError:
+                break
+            beta -= step
+            if float(np.linalg.norm(step)) < 1e-6:
+                break
+        weights["calibration_intercept"] = round(float(np.clip(beta[0], -1.0, 1.0)), 4)
+        weights["calibration_slope"] = round(float(np.clip(beta[1], 0.25, 2.5)), 4)
+        weights["calibration_samples"] = len(rows)
+        self._engine_weights_cache = dict(weights)
+        self._engine_weights_cache_ts = now
+        return weights
