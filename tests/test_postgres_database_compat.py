@@ -34,3 +34,13 @@ def test_existing_returning_clause_is_not_duplicated():
     )
     assert ignored is False
     assert sql == "INSERT INTO predictions (contract_ticker) VALUES (%s) RETURNING id"
+
+def test_settlement_reads_receive_row_locks():
+    prediction_sql, _ = _ConnectionCompat._sql(
+        "SELECT * FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 AND settled = 0"
+    )
+    trade_sql, _ = _ConnectionCompat._sql(
+        "SELECT * FROM trades WHERE contract_ticker = ? AND status = 'OPEN'"
+    )
+    assert prediction_sql.endswith("FOR UPDATE")
+    assert trade_sql.endswith("FOR UPDATE")
