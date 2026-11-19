@@ -28,6 +28,23 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 - Verify the feed endpoint reports CF Benchmarks BRTI as `LIVE` with a fresh source timestamp. If access is denied or data is stale, the predictor must continue to report BRTI unavailable and must not substitute Binance spot for BRTI.
 - Keep credentials out of the Docker build context. The repository's `.dockerignore` excludes environment files, private keys, local databases, and test artifacts.
 
+## Existing SQLite database migration (do not skip)
+
+Before changing the live app's database path or replacing its container:
+
+1. Identify the exact database file used by the current deployment from its existing `PREDICTOR_DB_PATH` setting. If unset, the application default is `satsignal_btc15m.db` relative to the app's working directory.
+2. Export a consistent SQLite backup from the current deployment while preserving the original database. Do not rely on a raw copy of an active WAL database; use SQLite's online backup API or a verified Hostless database export.
+3. Keep the original export untouched and stage a separate copy where a one-off migration process can read it and write to the mounted `/data` volume.
+4. Run the migration utility before starting the new app process, with the destination path absent:
+   ```sh
+   python -m scripts.migrate_sqlite --source /path/to/exported-existing.db --destination /data/satsignal_btc15m.db
+   ```
+5. Save the JSON result. It must report `status: verified`, `integrity_check: ok`, and row counts for every ledger table present in the source. Compare those counts with the current deployment's history, scoreboard, and trades before allowing normal startup.
+6. The migration utility refuses to overwrite any existing destination. If the destination already exists, stop and inspect it; do not delete it or rerun with a different source until its contents are understood.
+7. Keep the old deployment and original export available until the new deployment passes the restart and record-retention checks. Do not delete the old copy as part of this migration.
+
+Hostless must provide a way to export the current database and run the one-off migration before the new app starts. If it does not, pause deployment and choose a verified transfer method first. Never replace the old container on the assumption its local filesystem or database will remain available.
+
 ## SQLite persistence verification (required before production)
 
 SQLite survives a Hostless container restart when the database file is stored on a Hostless persistent volume. The Docker image creates the `/data` directory, but the Hostless volume attachment is what makes the data durable. The image now sets `PREDICTOR_DB_PATH=/data/satsignal_btc15m.db`, `PREDICTOR_STORAGE_MOUNT=/data`, and `PREDICTOR_REQUIRE_PERSISTENT_STORAGE=1` by default.
