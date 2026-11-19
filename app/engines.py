@@ -213,45 +213,48 @@ class RegimeEngine:
 class EarlyPredictionEngine:
     def analyze(self, ev: EvidenceMetrics, weakness: WeaknessReport, contract: ContractInfo) -> EarlyPredictionReport:
         in_early_window = max(0.0, 900.0 - contract.seconds_remaining) <= settings.early_window_seconds
-        # Reuse the shared strike-distance evidence so Early and Final do not
-        # reason from different price benchmarks. Older observations without
-        # the optional field retain the original spot-only calculation.
-        z_strike = (
-            float(ev.strike_z_score)
-            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
-            else EvidenceEngine._strike_z_score(
-                ev.live_price, contract.strike_price,
-                contract.seconds_remaining, ev.volatility_annualized,
-            )
+        # Early is an independent flow/participation check. Do not feed it
+        # strike distance: Evidence already includes the strike term, and
+        # repeating it here made a small positive spot/strike gap look like
+        # multiple independent confirmations.
+        pressure_tilt = (ev.buying_pressure_pct - 50.0) / 50.0
+        early_logit = (
+            0.65 * math.tanh(ev.cvd_contract / 4.0)
+            + 0.35 * float(np.clip(ev.orderbook_imbalance, -1.0, 1.0))
+            + 0.45 * float(np.clip(ev.momentum_score / 100.0, -1.0, 1.0))
+            + 0.35 * float(np.clip(pressure_tilt, -1.0, 1.0))
         )
-        early_logit = (0.85 * z_strike) + (0.65 * math.tanh(ev.cvd_contract / 4.0)) + (0.35 * ev.orderbook_imbalance)
-        if weakness.absorption_detected: early_logit *= 0.45
+        if weakness.absorption_detected:
+            early_logit *= 0.45
         up_prob = round(float(np.clip(norm.cdf(early_logit), 0.05, 0.95)), 4)
         down_prob = round(1.0 - up_prob, 4)
+        flow_strength = abs(early_logit)
         confidence = round(max(50.0, (max(up_prob, down_prob) * 100.0) - (weakness.weakness_score * 0.15)), 1)
-        if weakness.feed_degraded or confidence < 55.0:
-            sig, rationale = Signal.WAIT, "Early window lacks clean opening impulse or strike separation."
+        if weakness.feed_degraded or confidence < 55.0 or flow_strength < 0.18:
+            sig, rationale = Signal.WAIT, "Early window lacks sufficient independent trade-flow confirmation."
         elif up_prob > 0.5:
-            sig, rationale = Signal.UP, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor upside."
+            sig, rationale = Signal.UP, f"Opening CVD ({ev.cvd_contract:+.2f} BTC), momentum and buying pressure favor upside."
         else:
-            sig, rationale = Signal.DOWN, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor downside."
+            sig, rationale = Signal.DOWN, f"Opening CVD ({ev.cvd_contract:+.2f} BTC), momentum and selling pressure favor downside."
         return EarlyPredictionReport(active_window=in_early_window, signal=sig, confidence=confidence, up_prob=up_prob, down_prob=down_prob, rationale=rationale)
 
 class FinalDecisionEngine:
     def decide(self, ev: EvidenceMetrics, weakness: WeaknessReport, regime: RegimeReport, early: EarlyPredictionReport, contract: ContractInfo, weights: dict) -> FinalDecisionReport:
-        # Use the exact strike-distance evidence produced upstream. This carries
-        # fresh official BRTI confirmation through to the final probability while
-        # retaining spot-only behavior for legacy EvidenceMetrics payloads.
-        z_terminal = (
-            float(ev.strike_z_score)
-            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
-            else EvidenceEngine._strike_z_score(
-                ev.live_price, contract.strike_price,
-                contract.seconds_remaining, ev.volatility_annualized,
-            )
-        )
-        micro_drift_z = ((ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)) + ((early.up_prob - 0.5) * 0.45 * weights.get("early", 1.0))
-        raw_up_prob = float(np.clip(norm.cdf(z_terminal + micro_drift_z), 0.02, 0.98))
+        # Strike distance is already represented once inside EvidenceEngine.raw_score.
+        # Final combines that composite evidence with the independent flow-only
+        # Early probability; it must not add a second strike Z-score.
+        evidence_weight = max(0.0, float(weights.get("evidence", 1.0)))
+        early_weight = max(0.0, float(weights.get("early", 1.0)))
+        weight_total = evidence_weight + early_weight
+        if weight_total <= 1e-9:
+            evidence_weight, early_weight, weight_total = 1.0, 1.0, 2.0
+        evidence_component = math.tanh(float(ev.raw_score) / 45.0)
+        early_component = 2.0 * (float(early.up_prob) - 0.5)
+        combined_logit = (
+            evidence_weight * 0.75 * evidence_component
+            + early_weight * 0.75 * early_component
+        ) / weight_total
+        raw_up_prob = float(np.clip(norm.cdf(combined_logit), 0.05, 0.95))
         shrink = min(0.70, weakness.weakness_score / 130.0)
         up_prob = round(0.5 + (raw_up_prob - 0.5) * (1.0 - shrink), 4)
         down_prob = round(1.0 - up_prob, 4)
