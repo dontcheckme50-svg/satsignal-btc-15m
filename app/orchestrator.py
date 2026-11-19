@@ -267,6 +267,7 @@ class PredictorOrchestrator:
 
             confirmed_direction = (
                 engine_inputs_fresh
+                and new_contract.seconds_remaining > settings.final_lockout_seconds
                 and new_contract.is_official_kalshi
                 and self._directional_lock_candidate_ticker == new_contract.ticker
                 and self._directional_lock_candidate in (Signal.UP, Signal.DOWN)
