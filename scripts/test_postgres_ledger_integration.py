@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import traceback
 import uuid
 from pathlib import Path
 
@@ -121,4 +122,7 @@ if __name__ == "__main__":
     except Exception as exc:
         # Never expose DSNs or credential-bearing exception strings in CI logs.
         print(f"FAIL: PostgreSQL ledger integration test ({type(exc).__name__})")
+        # Print source locations only; never print exception text or connection details.
+        for frame in traceback.extract_tb(exc.__traceback__):
+            print(f"  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
         raise SystemExit(1)
