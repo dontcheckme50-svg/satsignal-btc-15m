@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import uuid
+from pathlib import Path
+
+# Allow direct execution as `python scripts/test_postgres_ledger_integration.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import psycopg
 
