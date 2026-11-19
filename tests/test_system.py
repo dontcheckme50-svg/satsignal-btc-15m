@@ -1193,6 +1193,39 @@ def test_directional_lock_requires_two_consecutive_matching_votes(monkeypatch, t
     assert ledger.has_official_prediction_lock(contract.ticker)
 
 
+def test_directional_lock_rejects_rapid_duplicate_evaluation(monkeypatch, tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(open_timestamp=now - 10.0, close_timestamp=now + 800.0)
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    ledger = PredictionLedger(str(tmp_path / "rapid-duplicate-lock.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    monkeypatch.setattr(
+        orchestrator.final_engine, "decide",
+        lambda *a, **k: _decision(Signal.UP),
+    )
+
+    first = orchestrator.evaluate_once(now=now, record_to_db=True)
+    rapid_second = orchestrator.evaluate_once(now=now + 0.05, record_to_db=True)
+
+    assert first is not None and rapid_second is not None
+    assert orchestrator._directional_lock_candidate_count == 2
+    assert ledger.get_recent_predictions() == []
+
+    confirmed = orchestrator.evaluate_once(now=now + 1.01, record_to_db=True)
+
+    assert confirmed is not None
+    rows = ledger.get_recent_predictions()
+    assert len(rows) == 1
+    assert rows[0].contract_ticker == contract.ticker
+    assert rows[0].final_signal == Signal.UP
+
+
 @pytest.mark.parametrize(
     "votes",
     [
