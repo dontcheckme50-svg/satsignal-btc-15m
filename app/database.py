@@ -1,4 +1,4 @@
-import os, sqlite3, json, math
+import os, sqlite3, json, math, time
 import numpy as np
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -9,6 +9,8 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._engine_weights_cache = None
+        self._engine_weights_cache_ts = 0.0
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -569,12 +571,15 @@ class PredictionLedger:
             )
 
     def get_engine_weights(self) -> Dict[str, float]:
-        """Return conservative engine weights and a settled-outcome probability calibrator.
+        """Return cached engine weights and a settled-outcome probability calibrator.
 
-        Platt calibration is deliberately disabled until there are at least 30
-        settled directional locks. It is fitted only on historical final
-        probabilities and verified UP/DOWN outcomes, never pending/WAIT rows.
+        Calibration is refreshed every 30 seconds rather than on every one-second
+        prediction cycle, keeping database reads and fitting work bounded.
         """
+        now = time.monotonic()
+        if self._engine_weights_cache is not None and now - self._engine_weights_cache_ts < 30.0:
+            return dict(self._engine_weights_cache)
+
         sb = self.get_scoreboard()
         weights = {
             "evidence": 1.0,
@@ -596,6 +601,8 @@ class PredictionLedger:
                    ORDER BY epoch_ts DESC LIMIT 500"""
             ).fetchall()
         if len(rows) < 30:
+            self._engine_weights_cache = dict(weights)
+            self._engine_weights_cache_ts = now
             return weights
 
         # Fit a regularized two-parameter logistic calibration:
@@ -629,4 +636,6 @@ class PredictionLedger:
         weights["calibration_intercept"] = round(float(np.clip(beta[0], -1.0, 1.0)), 4)
         weights["calibration_slope"] = round(float(np.clip(beta[1], 0.25, 2.5)), 4)
         weights["calibration_samples"] = len(rows)
+        self._engine_weights_cache = dict(weights)
+        self._engine_weights_cache_ts = now
         return weights
