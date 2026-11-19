@@ -45,6 +45,10 @@ async def get_health():
     return {"status": "ok", "uptime_seconds": round(time.time() - START_TIME, 1), "server_time_iso": iso_now(), "trading_mode": settings.trading_mode, "has_live_snapshot": orchestrator.latest_snapshot is not None}
 
 
+@app.get("/api/storage/health")
+async def get_storage_health():
+    return ledger.get_storage_health()
+
 @app.get("/api/orchestrator/health")
 async def get_orchestrator_health():
     return orchestrator.get_runtime_health()
