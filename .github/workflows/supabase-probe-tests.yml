@@ -36,6 +36,8 @@ permissions:
 jobs:
   probe-tests:
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -50,8 +52,6 @@ jobs:
         run: python -m pytest -q tests/test_postgres_connection_probe.py tests/test_postgres_schema.py tests/test_inspect_postgres_schema.py tests/test_postgres_database_compat.py
       - name: Test Supabase PostgreSQL login (read-only)
         if: ${{ env.SUPABASE_DATABASE_URL != '' }}
-        env:
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
         run: python scripts/check_postgres_connection.py
       - name: Test PostgreSQL ledger in an isolated temporary schema
         if: ${{ env.SUPABASE_DATABASE_URL != '' }}
