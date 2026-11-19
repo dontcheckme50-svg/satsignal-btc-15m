@@ -438,8 +438,9 @@ class PredictionLedger:
             return int(cur.lastrowid)
 
     def get_unsettled_contract_tickers(self) -> List[str]:
-        # Reconcile both official forecast locks and open paper trades. A trade
-        # can legitimately open before the two-vote forecast lock exists.
+        # Reconcile both official forecast locks and open paper trades.
+        # Paper entries now require a matching immutable directional lock, but
+        # retaining the trade query also recovers any legacy open paper rows.
         # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
             rows = conn.execute(
