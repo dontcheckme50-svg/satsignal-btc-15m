@@ -568,8 +568,64 @@ class PredictionLedger:
             )
 
     def get_engine_weights(self) -> Dict[str, float]:
+        """Return conservative engine weights and a settled-outcome probability calibrator.
+
+        Platt calibration is deliberately disabled until there are at least 30
+        settled directional locks. It is fitted only on historical final
+        probabilities and verified UP/DOWN outcomes, never pending/WAIT rows.
+        """
         sb = self.get_scoreboard()
-        if sb.total_settled < 15:
-            return {"evidence": 1.0, "early": 1.0}
-        return {"evidence": round(max(0.6, min(1.4, sb.main_accuracy_pct / 52.0)), 3),
-                "early": round(max(0.6, min(1.4, sb.early_accuracy_pct / 52.0)), 3)}
+        weights = {
+            "evidence": 1.0,
+            "early": 1.0,
+            "calibration_slope": 1.0,
+            "calibration_intercept": 0.0,
+            "calibration_samples": 0,
+        }
+        if sb.total_settled >= 15:
+            weights["evidence"] = round(max(0.6, min(1.4, sb.main_accuracy_pct / 52.0)), 3)
+            weights["early"] = round(max(0.6, min(1.4, sb.early_accuracy_pct / 52.0)), 3)
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """SELECT up_prob, actual_outcome FROM predictions
+                   WHERE settled = 1 AND is_official_lock = 1
+                     AND final_signal IN ('UP', 'DOWN')
+                     AND actual_outcome IN ('UP', 'DOWN')
+                   ORDER BY epoch_ts DESC LIMIT 500"""
+            ).fetchall()
+        if len(rows) < 30:
+            return weights
+
+        # Fit a regularized two-parameter logistic calibration:
+        # calibrated_logit = intercept + slope * logit(model_probability).
+        # The prior (slope=1, intercept=0) prevents small samples from
+        # producing extreme corrections.
+        x = np.array([
+            math.log(
+                min(0.98, max(0.02, float(row["up_prob"]))) /
+                (1.0 - min(0.98, max(0.02, float(row["up_prob"]))))
+            )
+            for row in rows
+        ], dtype=float)
+        y = np.array([1.0 if row["actual_outcome"] == "UP" else 0.0 for row in rows], dtype=float)
+        beta = np.array([0.0, 1.0], dtype=float)  # intercept, slope
+        ridge = 5.0
+        for _ in range(40):
+            z = np.clip(beta[0] + beta[1] * x, -12.0, 12.0)
+            pred = 1.0 / (1.0 + np.exp(-z))
+            variance = np.maximum(pred * (1.0 - pred), 1e-6)
+            design = np.column_stack((np.ones_like(x), x))
+            gradient = design.T @ (pred - y) + ridge * np.array([beta[0], beta[1] - 1.0])
+            hessian = (design.T * variance) @ design + ridge * np.eye(2)
+            try:
+                step = np.linalg.solve(hessian, gradient)
+            except np.linalg.LinAlgError:
+                break
+            beta -= step
+            if float(np.linalg.norm(step)) < 1e-6:
+                break
+        weights["calibration_intercept"] = round(float(np.clip(beta[0], -1.0, 1.0)), 4)
+        weights["calibration_slope"] = round(float(np.clip(beta[1], 0.25, 2.5)), 4)
+        weights["calibration_samples"] = len(rows)
+        return weights
