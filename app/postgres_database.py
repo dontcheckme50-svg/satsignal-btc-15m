@@ -85,7 +85,7 @@ class _ConnectionCompat:
         statement, _ = self._sql(sql)
         cur = self._connection.execute(statement, params or ())
         wrapped = _CursorCompat(cur)
-        if "RETURNING id" in statement.upper():
+        if "RETURNING ID" in statement.upper():
             row = cur.fetchone()
             wrapped.lastrowid = row["id"] if row else None
             wrapped._returning_without_row = row is None or row.get("id") is None
