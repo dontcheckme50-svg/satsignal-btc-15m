@@ -37,6 +37,14 @@ def main() -> int:
         admin.commit()
         # PostgreSQL options set the search_path for every ledger connection.
         test_url = database_url + ("&" if "?" in database_url else "?") + f"options=-csearch_path%3D{schema}"
+
+        # Prove every new pooled connection resolves this unique schema before
+        # allowing the ledger constructor to create or write any tables.
+        with psycopg.connect(test_url, connect_timeout=10, sslmode="require") as guard:
+            resolved_schema = guard.execute("SELECT current_schema()").fetchone()[0]
+            if resolved_schema != schema:
+                raise RuntimeError("Temporary PostgreSQL schema was not selected; refusing all ledger writes")
+
         ledger = PostgresPredictionLedger(test_url)
 
         prediction = PredictionRecord(
