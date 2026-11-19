@@ -171,7 +171,7 @@ class PostgresPredictionLedger(PredictionLedger):
                        SELECT contract_ticker, MIN(epoch_ts) AS first_seen
                        FROM predictions
                        WHERE settled = 0 AND is_official_lock = 1
-                         AND contract_ticker LIKE 'KXBTC15M%'
+                         AND LEFT(contract_ticker, 8) = 'KXBTC15M'
                        GROUP BY contract_ticker
                        UNION ALL
                        SELECT contract_ticker,
@@ -180,7 +180,7 @@ class PostgresPredictionLedger(PredictionLedger):
                                   'YYYY-MM-DD HH24:MI:SS'
                               ))), 0.0) AS first_seen
                        FROM trades
-                       WHERE status = 'OPEN' AND contract_ticker LIKE 'KXBTC15M%'
+                       WHERE status = 'OPEN' AND LEFT(contract_ticker, 8) = 'KXBTC15M'
                        GROUP BY contract_ticker
                    )
                    SELECT contract_ticker, MIN(first_seen) AS first_seen
