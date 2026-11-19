@@ -1917,3 +1917,9 @@ def test_legacy_database_migration_preserves_existing_prediction_and_trade(tmp_p
         "primary_spot_age_seconds", "official_brti_age_seconds",
         "reference_vs_strike_bps",
     } <= reference_columns
+
+
+def test_database_open_failure_is_not_silently_replaced_with_memory_db(tmp_path):
+    missing_parent_db = tmp_path / "missing-volume" / "satsignal.db"
+    with pytest.raises(sqlite3.OperationalError):
+        PredictionLedger(str(missing_parent_db))
