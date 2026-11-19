@@ -37,7 +37,7 @@ Open `http://localhost:8000`. API docs: `/docs`; health: `/api/health`; scoreboa
 
 ## Deployment and persistence
 
-Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_DB_PATH` to a mounted persistent volume path if the host provides one. A container's ephemeral filesystem may be wiped on restart; do not assume the scoreboard/history will survive without persistent storage. Do not activate paid storage without explicit approval.
+Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_DB_PATH` to a mounted persistent volume path if the host provides one. A container's ephemeral filesystem may be wiped on restart; do not assume the scoreboard/history will survive without persistent storage. The included `render.yaml` currently points SQLite at `/data` but does not provision a persistent disk, so that blueprint alone does not guarantee restart persistence. Confirm a persistent volume is actually mounted before relying on saved scoreboard/history. Do not activate paid storage without explicit approval.
 
 ## Feeds
 
