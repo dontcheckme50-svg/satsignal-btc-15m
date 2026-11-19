@@ -52,7 +52,7 @@ class VenueBook:
         self.last_trade_price, self.last_trade_ts = price, ts
         return True
 
-    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180)) -> dict:
+    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180, 900)) -> dict:
         now = time.time() if now is None else now
         latest_trade_age = (now - self.last_trade_ts) if self.last_trade_ts and now >= self.last_trade_ts else None
         result = {
@@ -436,7 +436,7 @@ class MultiExchangeReference:
                 await asyncio.sleep(1.5)
 
     @staticmethod
-    def _aggregate_trade_flow(venues: List[dict], windows=(15, 60, 180)) -> dict:
+    def _aggregate_trade_flow(venues: List[dict], windows=(15, 60, 180, 900)) -> dict:
         aggregate = {"windows": {}}
         for window in windows:
             buy = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("buy_volume_btc", 0.0) for v in venues)
