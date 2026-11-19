@@ -10,6 +10,24 @@ import os
 import sys
 
 
+def _safe_error_category(exc: Exception) -> str:
+    """Return a coarse diagnostic without exposing connection details."""
+    message = str(exc).lower()
+    if "password authentication failed" in message or "authentication failed" in message:
+        return "AUTHENTICATION_REJECTED"
+    if "could not translate host name" in message or "name or service not known" in message or "getaddrinfo" in message:
+        return "DNS_LOOKUP_FAILED"
+    if "timeout" in message or "timed out" in message:
+        return "CONNECTION_TIMEOUT"
+    if "ssl" in message or "tls" in message or "certificate" in message:
+        return "TLS_NEGOTIATION_FAILED"
+    if "connection refused" in message:
+        return "CONNECTION_REFUSED"
+    if "no pg_hba.conf entry" in message:
+        return "SERVER_ACCESS_POLICY_REJECTED"
+    return "UNCLASSIFIED_OPERATIONAL_ERROR"
+
+
 def main() -> int:
     dsn = os.environ.get("SUPABASE_DATABASE_URL", "").strip()
     if not dsn:
@@ -42,6 +60,7 @@ def main() -> int:
         # Avoid printing exception text because drivers may include connection
         # metadata. The class name is enough to guide safe diagnostics.
         print(f"POSTGRES CONNECTION: FAILED ({type(exc).__name__})")
+        print(f"SAFE DIAGNOSTIC: {_safe_error_category(exc)}")
         return 1
 
 
