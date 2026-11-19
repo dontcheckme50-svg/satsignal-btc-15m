@@ -132,6 +132,9 @@ if __name__ == "__main__":
     except Exception as exc:
         # Never expose DSNs or credential-bearing exception strings in CI logs.
         print(f"FAIL: PostgreSQL ledger integration test ({type(exc).__name__})")
+        if isinstance(exc, AssertionError) and str(exc):
+            # Only our explicitly sanitized assertion diagnostics are emitted.
+            print(f"SAFE_ASSERTION_DETAIL: {exc}")
         # Print source locations only; never print exception text or connection details.
         for frame in traceback.extract_tb(exc.__traceback__):
             print(f"  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
