@@ -1689,3 +1689,39 @@ def test_execution_refuses_missing_stale_or_misaligned_spot_book(tmp_path, book_
 
     assert result is None
     assert ledger.get_recent_trades() == []
+
+
+
+def test_execution_rejects_delayed_snapshot_after_contract_rollover(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "execution-rollover-stale-snapshot.db"))
+    old_contract = _contract(ticker="KXBTC15M-OLD")
+    new_contract = _contract(
+        ticker="KXBTC15M-NEW",
+        open_timestamp=time.time() - 5.0,
+        close_timestamp=time.time() + 895.0,
+    )
+    hub = _fresh_execution_hub(new_contract)
+    manager = ExecutionManager(hub, ledger)
+
+    result = asyncio.run(
+        manager.evaluate_and_execute(time.time(), old_contract, _decision())
+    )
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
+
+
+def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "execution-live-quote.db"))
+    snapshot_contract = _contract(yes_ask_dollars=0.80)
+    live_contract = _contract(yes_ask_dollars=0.20)
+    hub = _fresh_execution_hub(live_contract)
+    manager = ExecutionManager(hub, ledger)
+
+    result = asyncio.run(
+        manager.evaluate_and_execute(time.time(), snapshot_contract, _decision())
+    )
+
+    assert result is not None
+    assert result.entry_price == pytest.approx(0.20)
+    assert result.quote_source == "KALSHI_LIVE_BOOK"
