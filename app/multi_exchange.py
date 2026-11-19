@@ -53,7 +53,7 @@ class VenueBook:
         self.last_trade_price, self.last_trade_ts = price, ts
         return True
 
-    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180, 900)) -> dict:
+    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180, 900), since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
         latest_trade_age = (now - self.last_trade_ts) if self.last_trade_ts and now >= self.last_trade_ts else None
         result = {
@@ -69,7 +69,7 @@ class VenueBook:
                 ts, price, qty = float(ts), float(price), float(qty)
             except (TypeError, ValueError):
                 continue
-            if not all(math.isfinite(v) for v in (ts, price, qty)) or price <= 0 or qty <= 0 or ts > now or ts < now - max_window:
+            if not all(math.isfinite(v) for v in (ts, price, qty)) or price <= 0 or qty <= 0 or ts > now or ts < now - max_window or (since_ts is not None and ts < since_ts):
                 continue
             recent_max.append((ts, price, qty, side))
         for window in windows:
@@ -91,7 +91,7 @@ class VenueBook:
             }
         return result
 
-    def snapshot(self, now: Optional[float] = None, max_levels: int = 20) -> dict:
+    def snapshot(self, now: Optional[float] = None, max_levels: int = 20, since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
         bids = sorted(
             ((p, q) for p, q in self.bids.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
@@ -115,7 +115,7 @@ class VenueBook:
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
                 "bid_depth": 0.0, "ask_depth": 0.0, "bid_depth_25bps": 0.0, "ask_depth_25bps": 0.0, "imbalance": None, "levels": 0,
                 "last_error": self.last_error, "reconnects": self.reconnects,
-                "trade_flow": self.trade_flow_snapshot(now),
+                "trade_flow": self.trade_flow_snapshot(now, since_ts=since_ts),
             }
         bid, bid_qty = bids[0]
         ask, ask_qty = asks[0]
@@ -491,9 +491,9 @@ class MultiExchangeReference:
             }
         return aggregate
 
-    def get_snapshot(self, now: Optional[float] = None) -> dict:
+    def get_snapshot(self, now: Optional[float] = None, since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
-        venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.bitstamp.snapshot(now), self.binance.snapshot(now)]
+        venues = [self.coinbase.snapshot(now, since_ts=since_ts), self.kraken.snapshot(now, since_ts=since_ts), self.bitstamp.snapshot(now, since_ts=since_ts), self.binance.snapshot(now, since_ts=since_ts)]
         live = [v for v in venues if v["status"] == "LIVE" and v["mid"] is not None]
         usd_live = [v for v in live if v["quote"] == "USD"]
         prices = [v["mid"] for v in usd_live]
