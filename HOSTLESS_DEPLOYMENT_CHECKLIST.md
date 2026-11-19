@@ -9,8 +9,8 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 3. Use the repository root as the working directory and `Dockerfile` as the Dockerfile path.
 4. Set the health-check path to `/api/health`.
 5. Keep the app at one replica and paper-only mode. This release hardcodes `trading_mode = "paper"` and has no live/demo order-submission path.
-6. Do **not** create or attach a paid volume or resize beyond the account's free entitlement. Review the current resource estimate before confirming creation or deployment.
-7. The current release uses SQLite. Without persistent storage, prediction history, trade history, and scoreboard records may be lost when the container is replaced. Do not assume the container filesystem is durable. For durable cloud history, use an included/free managed database allowance only after confirming the exact cost in the Hostless UI and migrating the app database deliberately. A new volume can incur charges.
+6. Attach the Hostless persistent volume at `/data` using the same Hostless app deployment. If the Hostless UI shows an added charge, pause and confirm the price before applying it; do not silently approve paid resources.
+7. The Docker image now defaults SQLite to `/data/satsignal_btc15m.db` and requires a verified writable persistent mount. The app will fail startup rather than quietly write the scoreboard and history to disposable container storage.
 8. Deploy and verify:
    - `/api/health` returns `status: ok` and `trading_mode: paper`
    - `/` displays the dashboard
@@ -30,19 +30,15 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 
 ## SQLite persistence verification (required before production)
 
-SQLite can survive Hostless restarts only when its database file is inside a Hostless persistent volume. Docker's `RUN mkdir -p /data` creates a directory; it does not make that directory persistent.
+SQLite survives a Hostless container restart when the database file is stored on a Hostless persistent volume. The Docker image creates the `/data` directory, but the Hostless volume attachment is what makes the data durable. The image now sets `PREDICTOR_DB_PATH=/data/satsignal_btc15m.db`, `PREDICTOR_STORAGE_MOUNT=/data`, and `PREDICTOR_REQUIRE_PERSISTENT_STORAGE=1` by default.
 
-1. Attach a persistent Hostless volume at `/data` only if its price is explicitly approved. Do not create a paid volume without approval.
-2. Confirm the Hostless volume is mounted and writable at `/data`.
-3. Set `PREDICTOR_DB_PATH=/data/satsignal_btc15m.db`.
-4. Set `PREDICTOR_STORAGE_MOUNT=/data`.
-5. Set `PREDICTOR_REQUIRE_PERSISTENT_STORAGE=1`. With this enabled, startup fails closed if the mount is missing, read-only, or the SQLite path is outside it. This prevents the app from quietly accepting writes to disposable container storage.
-6. Verify `/api/storage/health` reports `persistent_mount_confirmed: true` and `status: PERSISTENT_MOUNT_CONFIRMED` under `persistent_storage`.
-7. Write a test prediction/trade in a non-production test environment, restart/redeploy the Hostless app, then verify the same record IDs and scoreboard totals remain. Repeat at least three times.
-8. If the mount cannot be confirmed, do not treat the app as production-ready. The app may run in development mode with persistence marked unverified, but records are not guaranteed across container replacement.
+1. Attach the Hostless persistent volume to the existing app at `/data`. If the UI displays an added charge, pause and confirm the exact price before applying it.
+2. Confirm the volume is mounted and writable at `/data`.
+3. Verify `/api/storage/health` reports `persistent_mount_confirmed: true` and `status: PERSISTENT_MOUNT_CONFIRMED` under `persistent_storage`.
+4. Write a test prediction/trade in a non-production test environment, restart/redeploy the Hostless app, and verify the same record IDs and scoreboard totals remain. Repeat at least three times.
+5. If the mount is missing or invalid, startup is blocked. Do not disable the guard to make the deployment appear healthy; correct the volume attachment instead.
 
-The automated regression suite also starts separate Python processes against one shared directory and verifies SQLite rows remain readable after three process restarts. This tests SQLite/process restart behavior; only a real Hostless restart with an attached persistent volume can verify Hostless volume retention.
-
+CI now builds the production image, starts it with a persistent Docker volume, writes a SQLite marker, replaces the container, and verifies the marker survives. This proves the image's SQLite path and guard work with a persistent volume. Only a real Hostless restart with its attached volume can verify Hostless volume retention.
 ## Data integrity notes
 
 - Prediction records are scored only after the official Kalshi settlement fetch verifies the contract outcome.
