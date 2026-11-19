@@ -45,11 +45,11 @@ class _ConnectionCompat:
     @staticmethod
     def _sql(sql: str) -> tuple[str, bool]:
         statement = sql.strip()
-        ignored_insert = bool(re.match(r"INSERT\\s+OR\\s+IGNORE\\s+INTO", statement, re.I))
+        ignored_insert = bool(re.match(r"INSERT\s+OR\s+IGNORE\s+INTO", statement, re.I))
         if ignored_insert:
-            statement = re.sub(r"INSERT\\s+OR\\s+IGNORE\\s+INTO", "INSERT INTO", statement, count=1, flags=re.I)
+            statement = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", statement, count=1, flags=re.I)
             statement = statement.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING RETURNING id"
-        elif re.match(r"INSERT\\s+INTO", statement, re.I) and "RETURNING" not in statement.upper():
+        elif re.match(r"INSERT\s+INTO", statement, re.I) and "RETURNING" not in statement.upper():
             statement = statement.rstrip().rstrip(";") + " RETURNING id"
         statement = statement.replace("?", "%s")
         return statement, ignored_insert
