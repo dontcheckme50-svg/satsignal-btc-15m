@@ -408,19 +408,28 @@ def test_rollover_feed_outage_cannot_carry_lock_confirmation_and_recovers_once(t
     assert ledger.get_scoreboard().total_predictions == 2
 
 
-def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine_signals_up(tmp_path):
+@pytest.mark.parametrize("stale_input", ["spot", "book", "book_source"])
+def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine_signals_up(
+    tmp_path, stale_input
+):
     from app.config import settings
 
-    ledger = PredictionLedger(str(tmp_path / "stale-directional-lock.db"))
+    ledger = PredictionLedger(str(tmp_path / f"stale-directional-lock-{stale_input}.db"))
     now = 1_800_000_000.0
-    contract = _official_contract("KXBTC15M-STALE-DIRECTION", now, remaining=500.0)
+    contract = _official_contract(f"KXBTC15M-STALE-DIRECTION-{stale_input}", now, remaining=500.0)
     hub = _ready_hub(contract, now)
     orchestrator = PredictorOrchestrator(hub, ledger)
     # Simulate a downstream engine bug or override that emits UP despite
     # degraded inputs. The orchestrator's independent lock gate must stop it.
     orchestrator.final_engine.decide = lambda *args: _final_report(Signal.UP)
 
-    hub.last_spot_ts = now - settings.stale_feed_threshold_sec - 1.0
+    if stale_input == "spot":
+        hub.last_spot_ts = now - settings.stale_feed_threshold_sec - 1.0
+    elif stale_input == "book":
+        hub.last_book_ts = now - settings.stale_feed_threshold_sec - 1.0
+    else:
+        hub.last_book_source = "OTHER_SOURCE"
+
     stale = orchestrator.evaluate_once(now=now)
 
     assert stale is not None
