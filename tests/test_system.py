@@ -117,6 +117,8 @@ def test_execution_places_at_most_one_paper_trade_per_contract(tmp_path):
     contract = _contract()
     hub = _fresh_execution_hub(contract)
     manager = ExecutionManager(hub, ledger)
+    # Execution now follows the immutable official directional prediction lock.
+    ledger.record_prediction(_prediction_record(contract.ticker, final=Signal.UP))
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
     second = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
@@ -946,6 +948,7 @@ def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_pa
     ledger = PredictionLedger(str(tmp_path / "one-entry-per-contract.db"))
     contract = _contract()
     manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
+    ledger.record_prediction(_prediction_record(contract.ticker, final=Signal.UP))
 
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
@@ -1756,6 +1759,7 @@ def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
     )
     hub = _fresh_execution_hub(live_contract)
     manager = ExecutionManager(hub, ledger)
+    ledger.record_prediction(_prediction_record(snapshot_contract.ticker, final=Signal.UP))
 
     result = asyncio.run(
         manager.evaluate_and_execute(time.time(), snapshot_contract, _decision())
