@@ -586,3 +586,28 @@ async def test_kraken_trade_uses_exchange_event_timestamp(monkeypatch):
     assert len(reference.kraken.trades) == 1
     assert reference.kraken.trades[0][0] == pytest.approx(source_ts, abs=0.01)
     assert reference.kraken.last_trade_ts == pytest.approx(source_ts, abs=0.01)
+
+
+def test_contract_scoped_trade_flow_excludes_previous_contract_activity():
+    reference = MultiExchangeReference()
+    contract_open = 990.0
+    now = 1000.0
+    reference.coinbase.trades.extend([
+        (985.0, 100.0, 0.75, "buy"),  # Previous contract.
+        (995.0, 100.0, 0.25, "sell"),
+    ])
+    reference.kraken.trades.extend([
+        (988.0, 100.0, 1.00, "buy"),  # Previous contract.
+        (996.0, 100.0, 0.50, "buy"),
+    ])
+
+    snapshot = reference.get_snapshot(now=now, since_ts=contract_open)
+    flow_15s = snapshot["trade_flow"]["windows"]["15"]
+    flow_900s = snapshot["trade_flow"]["windows"]["900"]
+
+    assert flow_15s["buy_volume_btc"] == 0.5
+    assert flow_15s["sell_volume_btc"] == 0.25
+    assert flow_15s["trade_count"] == 2
+    assert flow_900s["buy_volume_btc"] == 0.5
+    assert flow_900s["sell_volume_btc"] == 0.25
+    assert flow_900s["trade_count"] == 2
