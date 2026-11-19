@@ -198,6 +198,8 @@ class PredictorOrchestrator:
             observed_bars, evidence_bids, evidence_asks,
             official_brti_price=official_brti_price,
             official_brti_age_sec=brti_age if brti_is_fresh else None,
+            reference_price=reference_price,
+            reference_age_sec=multi_reference.get("reference_age_seconds"),
         )
         weakness = self.weakness_engine.analyze(
             ev, spot_age, book_age, book_source_matches=book_source_matches
