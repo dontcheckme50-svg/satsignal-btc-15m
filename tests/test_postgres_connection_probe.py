@@ -54,3 +54,20 @@ def test_probe_uses_tls_and_runs_select_one_only(monkeypatch, capsys):
     assert calls["kwargs"]["sslmode"] == "require"
     assert calls["kwargs"]["connect_timeout"] == 10
     assert "redacted" not in capsys.readouterr().out
+
+
+
+def test_probe_reports_only_safe_operational_error_category(monkeypatch, capsys):
+    class FakePsycopg:
+        @staticmethod
+        def connect(_dsn, **_kwargs):
+            raise RuntimeError("password authentication failed for user postgres.secret")
+
+    monkeypatch.setenv("SUPABASE_DATABASE_URL", "postgresql://user:secret@example.invalid/db")
+    monkeypatch.setitem(sys.modules, "psycopg", FakePsycopg)
+
+    assert check_postgres_connection.main() == 1
+    output = capsys.readouterr().out
+    assert "SAFE DIAGNOSTIC: AUTHENTICATION_REJECTED" in output
+    assert "secret" not in output
+    assert "example.invalid" not in output
