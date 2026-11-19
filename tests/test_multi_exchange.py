@@ -1,4 +1,6 @@
 import time
+from datetime import datetime, timezone
+
 import pytest
 
 import app.multi_exchange as multi_exchange_module
@@ -500,3 +502,87 @@ async def test_kraken_v2_stream_parses_book_trade_and_ticker_frames(monkeypatch)
     assert reference.kraken.last_book_ts > 0
     assert reference.kraken.last_ticker_ts > 0
     assert reference.kraken.snapshot()["status"] == "LIVE"
+
+
+def test_exchange_event_timestamp_parser_handles_seconds_milliseconds_iso_and_fallback():
+    fallback = 1_800_000_000.0
+    reference = MultiExchangeReference()
+
+    assert reference._event_timestamp(fallback, 1.0) == fallback
+    assert reference._event_timestamp(fallback * 1000, 1.0) == fallback
+    iso = datetime.fromtimestamp(fallback, tz=timezone.utc).isoformat()
+    assert reference._event_timestamp(iso, 1.0) == fallback
+    assert reference._event_timestamp("invalid-timestamp", fallback) == fallback
+    assert reference._event_timestamp(float("nan"), fallback) == fallback
+
+
+@pytest.mark.asyncio
+async def test_coinbase_match_uses_exchange_event_timestamp(monkeypatch):
+    reference = MultiExchangeReference()
+    reference._running = True
+    source_ts = time.time() - 2.0
+    source_time = datetime.fromtimestamp(source_ts, tz=timezone.utc).isoformat()
+    frame = {
+        "type": "match", "product_id": "BTC-USD", "price": "90000",
+        "size": "0.4", "side": "buy", "time": source_time,
+    }
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def messages():
+                yield multi_exchange_module.json.dumps(frame)
+                reference._running = False
+            return messages()
+
+    monkeypatch.setattr(
+        multi_exchange_module.websockets, "connect",
+        lambda *args, **kwargs: FakeWebSocket(),
+    )
+
+    await reference._coinbase_loop()
+
+    assert len(reference.coinbase.trades) == 1
+    assert reference.coinbase.trades[0][0] == pytest.approx(source_ts, abs=0.01)
+    assert reference.coinbase.last_trade_ts == pytest.approx(source_ts, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_kraken_trade_uses_exchange_event_timestamp(monkeypatch):
+    reference = MultiExchangeReference()
+    reference._running = True
+    source_ts = time.time() - 2.0
+    source_time = datetime.fromtimestamp(source_ts, tz=timezone.utc).isoformat()
+    frame = {
+        "channel": "trade",
+        "data": [{"price": "90000", "qty": "0.25", "side": "buy", "timestamp": source_time}],
+    }
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def messages():
+                yield multi_exchange_module.json.dumps(frame)
+                reference._running = False
+            return messages()
+
+    monkeypatch.setattr(
+        multi_exchange_module.websockets, "connect",
+        lambda *args, **kwargs: FakeWebSocket(),
+    )
+
+    await reference._kraken_loop()
+
+    assert len(reference.kraken.trades) == 1
+    assert reference.kraken.trades[0][0] == pytest.approx(source_ts, abs=0.01)
+    assert reference.kraken.last_trade_ts == pytest.approx(source_ts, abs=0.01)
