@@ -240,3 +240,40 @@ def test_radar_evidence_direction_flips_with_opposite_contract_price_and_flow():
     assert up.raw_score > 0
     assert down.raw_score < 0
     assert abs(up.raw_score + down.raw_score) < 1.0
+
+
+def test_full_decision_engine_can_lock_down_when_official_benchmark_confirms_down():
+    now = float(int(time.time()))
+    contract = _contract().model_copy(update={
+        "open_timestamp": now - 780.0,
+        "close_timestamp": now + 120.0,
+        "seconds_remaining": 120.0,
+    })
+    start = int(contract.open_timestamp)
+    end = int(now)
+    bars = [
+        (ts, 64000.0 - 100.0 * ((ts - start) / (end - start)), 1.0)
+        for ts in range(start, end + 1)
+    ]
+    trades = [
+        (now - 55.0 + i * 5.0, 63900.0, 0.2, True)
+        for i in range(12)
+    ]
+    bids = [(63899.0, 2.0), (63898.0, 1.0)]
+    asks = [(63901.0, 20.0), (63902.0, 15.0)]
+    evidence = EvidenceEngine().analyze(
+        now, 63900.0, contract, trades, bars, bids, asks,
+        official_brti_price=63900.0, official_brti_age_sec=0.2,
+    )
+    weakness = WeaknessEngine().analyze(evidence, 0.2, 0.2, True)
+    regime = RegimeEngine().analyze(evidence, weakness, bars)
+    early = EarlyPredictionEngine().analyze(evidence, weakness, contract)
+
+    final = FinalDecisionEngine().decide(
+        evidence, weakness, regime, early, contract, {},
+    )
+
+    assert evidence.signal == Signal.DOWN
+    assert early.signal == Signal.DOWN
+    assert final.agreement_status == "STRONG_CONSENSUS"
+    assert final.signal == Signal.DOWN
