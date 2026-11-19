@@ -1,5 +1,6 @@
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import pytest
 from pathlib import Path
@@ -1729,3 +1730,80 @@ def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
     assert result is not None
     assert result.entry_price == pytest.approx(0.20)
     assert result.quote_source == "KALSHI_LIVE_BOOK"
+
+
+def test_database_reopen_preserves_predictions_trades_and_scoreboard(tmp_path):
+    db_path = str(tmp_path / "restart-persistence.db")
+    first = PredictionLedger(db_path)
+    ticker = "KXBTC15M-RESTART-PERSISTENCE"
+    first.record_prediction(_prediction_record(ticker, final=Signal.UP))
+    first.record_trade(TradeRecord(
+        mode="paper", contract_ticker=ticker,
+        timestamp_iso="2026-11-18 00:00:00 UTC", side="YES",
+        contracts=2, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.02, fair_prob_at_entry=0.70, net_edge=0.49,
+        status="OPEN", notes="Restart persistence verification",
+    ))
+    first.settle_contract(
+        ticker, settlement_price=90020.0,
+        official_result="UP", settlement_source="KALSHI_VERIFIED",
+    )
+
+    reopened = PredictionLedger(db_path)
+    scoreboard = reopened.get_scoreboard()
+    predictions = reopened.get_recent_predictions(limit=5)
+    trades = reopened.get_recent_trades(limit=5)
+
+    assert scoreboard.total_predictions == 1
+    assert scoreboard.total_settled == 1
+    assert scoreboard.final_wins == 1
+    assert scoreboard.final_accuracy_pct == 100.0
+    assert len(predictions) == 1
+    assert predictions[0].contract_ticker == ticker
+    assert predictions[0].settled is True
+    assert len(trades) == 1
+    assert trades[0].status == "SETTLED"
+    assert trades[0].pnl_usd == pytest.approx(1.58)
+
+
+def test_concurrent_prediction_writes_keep_one_official_lock(tmp_path):
+    db_path = str(tmp_path / "concurrent-locks.db")
+    ledger = PredictionLedger(db_path)
+    record = _prediction_record("KXBTC15M-CONCURRENT-LOCK")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(lambda _index: ledger.record_prediction(record), range(24)))
+
+    assert len(set(ids)) == 1
+    assert len(ledger.get_recent_predictions(limit=10)) == 1
+    assert ledger.get_scoreboard().total_predictions == 1
+
+
+def test_concurrent_settlement_is_idempotent_and_does_not_double_pnl(tmp_path):
+    db_path = str(tmp_path / "concurrent-settlement.db")
+    ticker = "KXBTC15M-CONCURRENT-SETTLEMENT"
+    ledger = PredictionLedger(db_path)
+    ledger.record_prediction(_prediction_record(ticker, final=Signal.UP))
+    ledger.record_trade(TradeRecord(
+        mode="paper", contract_ticker=ticker,
+        timestamp_iso="2026-11-18 00:00:00 UTC", side="YES",
+        contracts=1, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01, fair_prob_at_entry=0.70, net_edge=0.49,
+        status="OPEN", notes="Concurrent settlement verification",
+    ))
+
+    def settle(_index):
+        return ledger.settle_contract(
+            ticker, settlement_price=None, official_result="UP",
+            settlement_source="KALSHI_VERIFIED",
+        )
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(settle, range(12)))
+
+    reopened = PredictionLedger(db_path)
+    assert reopened.get_scoreboard().total_settled == 1
+    trades = reopened.get_recent_trades(limit=5)
+    assert len(trades) == 1
+    assert trades[0].status == "SETTLED"
+    assert trades[0].pnl_usd == pytest.approx(0.79)
