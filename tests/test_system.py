@@ -1923,3 +1923,31 @@ def test_database_open_failure_is_not_silently_replaced_with_memory_db(tmp_path)
     missing_parent_db = tmp_path / "missing-volume" / "satsignal.db"
     with pytest.raises(sqlite3.OperationalError):
         PredictionLedger(str(missing_parent_db))
+
+
+def test_storage_health_reports_file_integrity_and_saved_record_counts(tmp_path):
+    db_path = str(tmp_path / "storage-health.db")
+    ledger = PredictionLedger(db_path)
+    ledger.record_prediction(_prediction_record("KXBTC15M-STORAGE-HEALTH"))
+
+    health = ledger.get_storage_health()
+
+    assert health["status"] == "HEALTHY"
+    assert health["storage_type"] == "FILE"
+    assert health["database_file_exists"] is True
+    assert health["database_size_bytes"] > 0
+    assert health["journal_mode"] == "WAL"
+    assert health["integrity_check"] == "ok"
+    assert health["record_counts"]["predictions"] == 1
+    assert health["record_counts"]["trades"] == 0
+
+
+def test_storage_health_reports_corruption_or_unavailable_database_without_crashing(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "storage-health-error.db"))
+    ledger.db_path = str(tmp_path / "missing" / "database.db")
+
+    health = ledger.get_storage_health()
+
+    assert health["status"] == "UNAVAILABLE"
+    assert health["integrity_check"] == "ERROR"
+    assert health["error_type"] == "OperationalError"
