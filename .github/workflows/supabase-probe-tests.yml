@@ -1,6 +1,7 @@
 name: Supabase connectivity probe tests
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - reliability-isolation-v1
