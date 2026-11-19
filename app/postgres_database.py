@@ -54,6 +54,19 @@ class _ConnectionCompat:
         elif re.match(r"INSERT\s+INTO", statement, re.I) and "RETURNING" not in statement.upper():
             statement = statement.rstrip().rstrip(";") + " RETURNING id"
         statement = statement.replace("?", "%s")
+        if (
+            statement.upper().startswith("SELECT * FROM PREDICTIONS")
+            and "IS_OFFICIAL_LOCK = 1" in statement.upper()
+            and "SETTLED = 0" in statement.upper()
+            and "FOR UPDATE" not in statement.upper()
+        ):
+            statement += " FOR UPDATE"
+        elif (
+            statement.upper().startswith("SELECT * FROM TRADES")
+            and "STATUS = 'OPEN'" in statement.upper()
+            and "FOR UPDATE" not in statement.upper()
+        ):
+            statement += " FOR UPDATE"
         return statement, ignored_insert
 
     def execute(self, sql: str, params=()):
