@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -1807,3 +1808,112 @@ def test_concurrent_settlement_is_idempotent_and_does_not_double_pnl(tmp_path):
     assert len(trades) == 1
     assert trades[0].status == "SETTLED"
     assert trades[0].pnl_usd == pytest.approx(0.79)
+
+
+def test_legacy_database_migration_preserves_existing_prediction_and_trade(tmp_path):
+    db_path = tmp_path / "legacy-schema.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contract_ticker TEXT NOT NULL,
+            timestamp_iso TEXT NOT NULL,
+            epoch_ts REAL NOT NULL,
+            strike_price REAL NOT NULL,
+            btc_price_at_pred REAL NOT NULL,
+            seconds_remaining REAL NOT NULL,
+            main_signal TEXT NOT NULL,
+            early_signal TEXT NOT NULL,
+            final_signal TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            up_prob REAL NOT NULL,
+            down_prob REAL NOT NULL,
+            regime TEXT NOT NULL,
+            settled INTEGER NOT NULL DEFAULT 0,
+            settlement_source TEXT,
+            settlement_price REAL,
+            actual_outcome TEXT,
+            final_won INTEGER,
+            main_won INTEGER,
+            early_won INTEGER
+        );
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode TEXT NOT NULL,
+            contract_ticker TEXT NOT NULL,
+            timestamp_iso TEXT NOT NULL,
+            side TEXT NOT NULL,
+            contracts INTEGER NOT NULL,
+            entry_price REAL NOT NULL,
+            quote_source TEXT NOT NULL DEFAULT 'KALSHI_LIVE_BOOK',
+            fee_paid REAL NOT NULL,
+            fair_prob_at_entry REAL NOT NULL,
+            net_edge REAL NOT NULL,
+            status TEXT NOT NULL,
+            pnl_usd REAL NOT NULL DEFAULT 0.0,
+            notes TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE multi_exchange_reference (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            epoch_ts REAL NOT NULL,
+            contract_ticker TEXT NOT NULL,
+            strike_price REAL,
+            primary_spot_price REAL,
+            official_brti_price REAL,
+            reference_price REAL,
+            reference_status TEXT NOT NULL,
+            usd_venue_count INTEGER NOT NULL DEFAULT 0,
+            included_venues_json TEXT NOT NULL DEFAULT '[]',
+            outlier_venues_json TEXT NOT NULL DEFAULT '[]',
+            venues_json TEXT NOT NULL DEFAULT '[]',
+            bid_depth_25bps REAL,
+            ask_depth_25bps REAL,
+            imbalance REAL,
+            ref_vs_primary_bps REAL,
+            ref_vs_brti_bps REAL,
+            primary_vs_brti_bps REAL
+        );
+        INSERT INTO predictions (
+            contract_ticker, timestamp_iso, epoch_ts, strike_price,
+            btc_price_at_pred, seconds_remaining, main_signal, early_signal,
+            final_signal, confidence, up_prob, down_prob, regime
+        ) VALUES (
+            'KXBTC15M-LEGACY-ROW', '2026-11-17 00:00:00 UTC', 1794873600.0,
+            90000.0, 90010.0, 500.0, 'UP', 'DOWN', 'UP', 70.0, 0.7, 0.3, 'STABLE'
+        );
+        INSERT INTO trades (
+            mode, contract_ticker, timestamp_iso, side, contracts, entry_price,
+            fee_paid, fair_prob_at_entry, net_edge, status
+        ) VALUES (
+            'paper', 'KXBTC15M-LEGACY-ROW', '2026-11-17 00:00:00 UTC',
+            'YES', 1, 0.2, 0.01, 0.7, 0.49, 'OPEN'
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+    migrated = PredictionLedger(str(db_path))
+    predictions = migrated.get_recent_predictions(limit=5)
+    trades = migrated.get_recent_trades(limit=5)
+    with migrated._connection() as check:
+        prediction_columns = {
+            row["name"] for row in check.execute("PRAGMA table_info(predictions)")
+        }
+        trade_columns = {
+            row["name"] for row in check.execute("PRAGMA table_info(trades)")
+        }
+        reference_columns = {
+            row["name"] for row in check.execute("PRAGMA table_info(multi_exchange_reference)")
+        }
+
+    assert len(predictions) == 1
+    assert predictions[0].contract_ticker == "KXBTC15M-LEGACY-ROW"
+    assert predictions[0].is_official_lock is True
+    assert len(trades) == 1
+    assert trades[0].status == "OPEN"
+    assert "settled_at" in trade_columns
+    assert {"brti_cohort", "brti_side_at_lock", "spot_side_at_lock"} <= prediction_columns
+    assert {
+        "primary_spot_age_seconds", "official_brti_age_seconds",
+        "reference_vs_strike_bps",
+    } <= reference_columns
