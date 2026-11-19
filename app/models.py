@@ -50,6 +50,14 @@ class EvidenceMetrics(BaseModel):
     structure_bias: str
     raw_score: float
     signal: Signal
+    official_brti_price: Optional[float] = None
+    official_brti_age_seconds: Optional[float] = None
+    brti_distance_from_strike: Optional[float] = None
+    brti_spot_spread_bps: Optional[float] = None
+    brti_conflict: bool = False
+    # Blended spot/BRTI strike-distance evidence used by the final probability engine.
+    # Optional for compatibility with historical observations and older payloads.
+    strike_z_score: Optional[float] = None
 
 class WeaknessReport(BaseModel):
     weakness_score: float
@@ -92,6 +100,7 @@ class EngineStatusSummary(BaseModel):
 
 class PredictionRecord(BaseModel):
     id: Optional[int] = None
+    is_official_lock: bool = True
     contract_ticker: str
     timestamp_iso: str
     epoch_ts: float
@@ -105,6 +114,9 @@ class PredictionRecord(BaseModel):
     up_prob: float
     down_prob: float
     regime: MarketRegime
+    brti_cohort: str = "UNKNOWN"
+    brti_side_at_lock: Optional[str] = None
+    spot_side_at_lock: Optional[str] = None
     settled: bool = False
     settlement_source: Optional[str] = None
     settlement_price: Optional[float] = None
