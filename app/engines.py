@@ -17,13 +17,12 @@ class EvidenceEngine:
         delta_60s = round(buy_vol_60s - sell_vol_60s, 4)
         # Only use observed trades within this contract and at/before the snapshot time.
         cvd = sum((t[2] if not t[3] else -t[2]) for t in trades if contract.open_timestamp <= t[0] <= now)
-        trades_10m = [t for t in trades if contract.open_timestamp <= t[0] and now - 600.0 <= t[0] <= now]
-        # Normalize against the amount of observed history. A short startup
-        # sample must not be divided by a full ten minutes and create a false
-        # volume-spike signal.
-        if trades_10m:
-            observed_seconds = min(600.0, now - min(t[0] for t in trades_10m))
-            avg_1m_vol = (sum(t[2] for t in trades_10m) / (observed_seconds / 60.0)) if observed_seconds >= 60.0 else 0.0
+        trades_15m = [t for t in trades if contract.open_timestamp <= t[0] and now - 900.0 <= t[0] <= now]
+        # Normalize against the actual observed portion of this 15-minute
+        # contract. Never dilute a short startup sample over a full 15 minutes.
+        if trades_15m:
+            observed_seconds = min(900.0, now - min(t[0] for t in trades_15m))
+            avg_1m_vol = (sum(t[2] for t in trades_15m) / (observed_seconds / 60.0)) if observed_seconds >= 60.0 else 0.0
         else:
             avg_1m_vol = 0.0
         vol_ratio = round(tot_vol_60s / avg_1m_vol, 2) if avg_1m_vol > 1e-6 else 1.0
@@ -37,16 +36,26 @@ class EvidenceEngine:
         # Only recent, source-observed bars may influence short-horizon signals.
         # Rebuild a one-second time series so sparse trade bars do not make
         # "last 30 observations" silently mean an arbitrary number of seconds.
-        valid_bars = [b for b in bars_1s if contract.open_timestamp <= b[0] and now - 300.0 <= b[0] <= now]
+        valid_bars = [b for b in bars_1s if contract.open_timestamp <= b[0] and now - 900.0 <= b[0] <= now]
         prices = self._resample_prices_to_seconds(valid_bars, now, live_price)
         rsi_14 = self._compute_rsi(prices[-60:], period=14)
         ann_vol = self._compute_annualized_vol(prices)
         p_30s = prices[-30] if len(prices) >= 30 else prices[0]
         p_120s = prices[-120] if len(prices) >= 120 else prices[0]
+        p_300s = prices[-300] if len(prices) >= 300 else prices[0]
+        p_900s = prices[-900] if len(prices) >= 900 else prices[0]
         ret_30s = (live_price - p_30s) / p_30s if p_30s > 0 else 0.0
         ret_120s = (live_price - p_120s) / p_120s if p_120s > 0 else 0.0
-        mom_score = float(np.clip((ret_30s * 18000.0) + (ret_120s * 9000.0), -100.0, 100.0))
-        structure = self._detect_structure(prices[-90:])
+        ret_300s = (live_price - p_300s) / p_300s if p_300s > 0 else 0.0
+        ret_900s = (live_price - p_900s) / p_900s if p_900s > 0 else 0.0
+        # Blend fast reaction with the 5-minute and full-contract trend so
+        # a brief burst cannot masquerade as a 15-minute directional move.
+        mom_score = float(np.clip(
+            ret_30s * 9000.0 + ret_120s * 6000.0
+            + ret_300s * 3000.0 + ret_900s * 1500.0,
+            -100.0, 100.0,
+        ))
+        structure = self._detect_structure(prices[-900:])
         spot_z = self._strike_z_score(live_price, contract.strike_price, contract.seconds_remaining, ann_vol)
         brti_age = official_brti_age_sec
         brti_valid = (
@@ -100,9 +109,9 @@ class EvidenceEngine:
     def _resample_prices_to_seconds(
         bars: List[Tuple[int, float, float]], now: float, live_price: float
     ) -> List[float]:
-        """Return at most 301 one-second prices, carrying the last observed trade forward."""
+        """Return at most 901 one-second prices for the current 15-minute contract."""
         end_sec = int(now)
-        start_sec = max(end_sec - 300, min((int(bar[0]) for bar in bars), default=end_sec))
+        start_sec = max(end_sec - 900, min((int(bar[0]) for bar in bars), default=end_sec))
         observed = {}
         for ts, price, _volume in bars:
             sec, value = int(ts), float(price)
@@ -184,7 +193,8 @@ class WeaknessEngine:
 
 class RegimeEngine:
     def analyze(self, ev: EvidenceMetrics, weakness: WeaknessReport, bars_1s: List[Tuple[int, float, float]]) -> RegimeReport:
-        prices = [b[1] for b in bars_1s[-180:]]
+        # Use the full contract window, not merely the last three minutes.
+        prices = [b[1] for b in bars_1s[-900:]]
         chop = self._choppiness_ratio(prices)
         vol_pct = min(100.0, round((ev.volatility_annualized / 1.20) * 100.0, 1))
         if weakness.absorption_detected or (ev.volatility_annualized > 0.95 and chop > 0.72) or weakness.weakness_score >= 55.0:
@@ -259,6 +269,8 @@ class FinalDecisionEngine:
         confidence = round(max(up_prob, down_prob) * 100.0, 1)
         if weakness.feed_degraded:
             final_sig, rationale = Signal.WAIT, "WAIT: Live market feed is stale or degraded."
+        elif ev.official_brti_price is None:
+            final_sig, rationale = Signal.WAIT, "WAIT: Official CF Benchmarks BRTI is unavailable; spot price alone cannot confirm this settlement benchmark."
         elif not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
             final_sig, rationale = Signal.WAIT, "WAIT: Verified official Kalshi contract and strike unavailable; proxy contract is non-actionable."
         elif contract.seconds_remaining < settings.final_lockout_seconds:
