@@ -33,7 +33,7 @@ $env:PREDICTOR_DB_PATH = "$PWD\satsignal_btc15m.db"
 .\.venv\Scripts\python.exe -m app.main
 ```
 
-Open `http://localhost:8000`. API docs: `/docs`; health: `/api/health`; scoreboard: `/api/scoreboard`.
+Open `http://localhost:8000`. API docs: `/docs`; process health (including storage status): `/api/health`; detailed SQLite integrity and record counts: `/api/storage/health`; scoreboard: `/api/scoreboard`.
 
 ## Deployment and persistence
 
