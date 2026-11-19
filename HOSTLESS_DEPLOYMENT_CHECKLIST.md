@@ -20,6 +20,14 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 9. Do not treat HTTP 200 or a dashboard snapshot as proof that the official market contract is valid. Confirm the ticker begins `KXBTC15M`, strike source is `KALSHI_OFFICIAL`, and contract close time is in the future.
 10. Let it collect verified settlements and paper observations before evaluating predictive performance. No profitability claim is made.
 
+## Kalshi credentials and official BRTI
+
+- Configure `KALSHI_KEY_ID` as a Hostless secret/environment variable.
+- Make the matching private key available as a Hostless-mounted secret file and set `KALSHI_PRIVATE_KEY_PATH` to that in-container file path. Do not paste PEM contents into deployment logs, source control, or ordinary configuration text.
+- Confirm the key has the required Kalshi API permissions and the account has the official CF Benchmarks BRTI entitlement. Authentication alone does not guarantee feed entitlement.
+- Verify the feed endpoint reports CF Benchmarks BRTI as `LIVE` with a fresh source timestamp. If access is denied or data is stale, the predictor must continue to report BRTI unavailable and must not substitute Binance spot for BRTI.
+- Keep credentials out of the Docker build context. The repository's `.dockerignore` excludes environment files, private keys, local databases, and test artifacts.
+
 ## SQLite persistence verification (required before production)
 
 SQLite can survive Hostless restarts only when its database file is inside a Hostless persistent volume. Docker's `RUN mkdir -p /data` creates a directory; it does not make that directory persistent.
