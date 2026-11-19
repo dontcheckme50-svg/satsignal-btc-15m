@@ -43,7 +43,7 @@ def main() -> int:
         with psycopg.connect(test_url, connect_timeout=10, sslmode="require") as guard:
             resolved_schema = guard.execute("SELECT current_schema()").fetchone()[0]
             if resolved_schema != schema:
-                raise RuntimeError("Temporary PostgreSQL schema was not selected; refusing all ledger writes")
+                raise RuntimeError(f"SAFE_SCHEMA_GUARD: expected={schema}; resolved={resolved_schema}; refusing all ledger writes")
 
         ledger = PostgresPredictionLedger(test_url)
 
