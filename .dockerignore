@@ -1,0 +1,27 @@
+# Never send credentials or local runtime state to the Docker build context.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases and SQLite sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+
+# Local development and test artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+.git/
+.github/

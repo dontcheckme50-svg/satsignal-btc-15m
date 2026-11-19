@@ -3,6 +3,7 @@ import aiohttp
 import json
 import math
 import time
+from datetime import datetime, timezone
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
@@ -49,10 +50,13 @@ class VenueBook:
         if side not in ("buy", "sell", "unknown"):
             side = "unknown"
         self.trades.append((ts, price, qty, side))
-        self.last_trade_price, self.last_trade_ts = price, ts
+        # Late/out-of-order events may remain in historical flow, but must not
+        # roll the venue's latest-price/freshness marker backwards.
+        if ts >= self.last_trade_ts:
+            self.last_trade_price, self.last_trade_ts = price, ts
         return True
 
-    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180)) -> dict:
+    def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180, 900), since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
         latest_trade_age = (now - self.last_trade_ts) if self.last_trade_ts and now >= self.last_trade_ts else None
         result = {
@@ -68,7 +72,7 @@ class VenueBook:
                 ts, price, qty = float(ts), float(price), float(qty)
             except (TypeError, ValueError):
                 continue
-            if not all(math.isfinite(v) for v in (ts, price, qty)) or price <= 0 or qty <= 0 or ts > now or ts < now - max_window:
+            if not all(math.isfinite(v) for v in (ts, price, qty)) or price <= 0 or qty <= 0 or ts > now or ts < now - max_window or (since_ts is not None and ts < since_ts):
                 continue
             recent_max.append((ts, price, qty, side))
         for window in windows:
@@ -90,7 +94,7 @@ class VenueBook:
             }
         return result
 
-    def snapshot(self, now: Optional[float] = None, max_levels: int = 20) -> dict:
+    def snapshot(self, now: Optional[float] = None, max_levels: int = 20, since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
         bids = sorted(
             ((p, q) for p, q in self.bids.items() if math.isfinite(p) and p > 0 and math.isfinite(q) and q > 0),
@@ -114,7 +118,7 @@ class VenueBook:
                 "bid": None, "ask": None, "mid": None, "spread": None, "spread_bps": None,
                 "bid_depth": 0.0, "ask_depth": 0.0, "bid_depth_25bps": 0.0, "ask_depth_25bps": 0.0, "imbalance": None, "levels": 0,
                 "last_error": self.last_error, "reconnects": self.reconnects,
-                "trade_flow": self.trade_flow_snapshot(now),
+                "trade_flow": self.trade_flow_snapshot(now, since_ts=since_ts),
             }
         bid, bid_qty = bids[0]
         ask, ask_qty = asks[0]
@@ -149,6 +153,28 @@ class MultiExchangeReference:
         self.binance = VenueBook("BINANCE", "USDT")
         self._running = False
         self._tasks = []
+
+    @staticmethod
+    def _event_timestamp(value, fallback: float) -> float:
+        """Parse exchange event time (seconds, milliseconds, or ISO-8601)."""
+        if value is None:
+            return float(fallback)
+        try:
+            if isinstance(value, (int, float)) or str(value).strip().replace(".", "", 1).isdigit():
+                parsed = float(value)
+                if parsed > 1e12:
+                    parsed /= 1000.0
+            else:
+                text_value = str(value).strip()
+                if text_value.endswith("Z"):
+                    text_value = text_value[:-1] + "+00:00"
+                parsed_dt = datetime.fromisoformat(text_value)
+                if parsed_dt.tzinfo is None:
+                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                parsed = parsed_dt.timestamp()
+            return parsed if math.isfinite(parsed) and parsed > 0 else float(fallback)
+        except (TypeError, ValueError, OverflowError):
+            return float(fallback)
 
     @staticmethod
     def _coinbase_aggressor_side(maker_side: str) -> str:
@@ -221,8 +247,9 @@ class MultiExchangeReference:
                         elif "aggTrade" in stream or msg.get("e") == "aggTrade":
                             price, qty = float(msg["p"]), float(msg["q"])
                             if price > 0 and qty > 0:
+                                event_ts = self._event_timestamp(msg.get("T", msg.get("E")), now)
                                 side = self._binance_aggressor_side(msg.get("m"))
-                                self.binance.ingest_trade(now, price, qty, side)
+                                self.binance.ingest_trade(event_ts, price, qty, side)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -237,9 +264,31 @@ class MultiExchangeReference:
                     self.binance.reconnects += 1
                     await asyncio.sleep(1.5)
 
+    @staticmethod
+    def _ingest_top_of_book(venue: VenueBook, bid, ask, bid_qty, ask_qty, ts: float) -> bool:
+        """Use a validated ticker BBO as a safe bootstrap when a depth snapshot is delayed."""
+        try:
+            bid, ask = float(bid), float(ask)
+            bid_qty, ask_qty = float(bid_qty), float(ask_qty)
+            ts = float(ts)
+        except (TypeError, ValueError):
+            return False
+        if not all(math.isfinite(v) for v in (bid, ask, bid_qty, ask_qty, ts)):
+            return False
+        if bid <= 0 or ask <= bid or bid_qty <= 0 or ask_qty <= 0 or ts <= 0 or ts > time.time() + 0.5:
+            return False
+        # Replace, rather than merge, cached depth: ticker BBO is not a full snapshot.
+        venue.bids = {bid: bid_qty}
+        venue.asks = {ask: ask_qty}
+        venue.last_book_ts = ts
+        venue.last_ticker_ts = ts
+        venue.connected = True
+        venue.last_error = None
+        return True
+
     async def _coinbase_loop(self):
         url = "wss://ws-feed.exchange.coinbase.com"
-        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "matches"]}
+        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "matches", "ticker"]}
         while self._running:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
@@ -280,9 +329,17 @@ class MultiExchangeReference:
                                 self.coinbase.last_book_ts = now
                         elif typ == "match" and msg.get("product_id") == "BTC-USD":
                             p, q = float(msg["price"]), float(msg["size"])
+                            event_ts = self._event_timestamp(msg.get("time"), now)
                             # Coinbase match side is maker-side; invert to aggressor side.
                             aggressor_side = self._coinbase_aggressor_side(msg.get("side"))
-                            self.coinbase.ingest_trade(now, p, q, aggressor_side)
+                            self.coinbase.ingest_trade(event_ts, p, q, aggressor_side)
+                        elif typ == "ticker" and msg.get("product_id") == "BTC-USD":
+                            self._ingest_top_of_book(
+                                self.coinbase,
+                                msg.get("best_bid"), msg.get("best_ask"),
+                                msg.get("best_bid_size"), msg.get("best_ask_size"),
+                                self._event_timestamp(msg.get("time"), now),
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -301,11 +358,13 @@ class MultiExchangeReference:
         url = "wss://ws.kraken.com/v2"
         subscribe_book = {"method": "subscribe", "params": {"channel": "book", "symbol": ["BTC/USD"], "depth": 10}}
         subscribe_trades = {"method": "subscribe", "params": {"channel": "trade", "symbol": ["BTC/USD"]}}
+        subscribe_ticker = {"method": "subscribe", "params": {"channel": "ticker", "symbol": ["BTC/USD"]}}
         while self._running:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
                     await ws.send(json.dumps(subscribe_book))
                     await ws.send(json.dumps(subscribe_trades))
+                    await ws.send(json.dumps(subscribe_ticker))
                     self.kraken.connected = True
                     self.kraken.last_error = None
                     async for raw in ws:
@@ -335,7 +394,16 @@ class MultiExchangeReference:
                         elif channel == "trade":
                             for trade in data_rows:
                                 p, q = float(trade["price"]), float(trade["qty"])
-                                self.kraken.ingest_trade(now, p, q, str(trade.get("side", "")).lower())
+                                event_ts = self._event_timestamp(trade.get("timestamp"), now)
+                                self.kraken.ingest_trade(event_ts, p, q, str(trade.get("side", "")).lower())
+                        elif channel == "ticker":
+                            for ticker in data_rows:
+                                self._ingest_top_of_book(
+                                    self.kraken,
+                                    ticker.get("bid"), ticker.get("ask"),
+                                    ticker.get("bid_qty"), ticker.get("ask_qty"),
+                                    self._event_timestamp(ticker.get("timestamp"), now),
+                                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -400,7 +468,7 @@ class MultiExchangeReference:
                 await asyncio.sleep(1.5)
 
     @staticmethod
-    def _aggregate_trade_flow(venues: List[dict], windows=(15, 60, 180)) -> dict:
+    def _aggregate_trade_flow(venues: List[dict], windows=(15, 60, 180, 900)) -> dict:
         aggregate = {"windows": {}}
         for window in windows:
             buy = sum(v.get("trade_flow", {}).get("windows", {}).get(str(window), {}).get("buy_volume_btc", 0.0) for v in venues)
@@ -427,9 +495,9 @@ class MultiExchangeReference:
             }
         return aggregate
 
-    def get_snapshot(self, now: Optional[float] = None) -> dict:
+    def get_snapshot(self, now: Optional[float] = None, since_ts: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
-        venues = [self.coinbase.snapshot(now), self.kraken.snapshot(now), self.bitstamp.snapshot(now), self.binance.snapshot(now)]
+        venues = [self.coinbase.snapshot(now, since_ts=since_ts), self.kraken.snapshot(now, since_ts=since_ts), self.bitstamp.snapshot(now, since_ts=since_ts), self.binance.snapshot(now, since_ts=since_ts)]
         live = [v for v in venues if v["status"] == "LIVE" and v["mid"] is not None]
         usd_live = [v for v in live if v["quote"] == "USD"]
         prices = [v["mid"] for v in usd_live]

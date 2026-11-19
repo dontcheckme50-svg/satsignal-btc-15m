@@ -117,6 +117,8 @@ def test_execution_places_at_most_one_paper_trade_per_contract(tmp_path):
     contract = _contract()
     hub = _fresh_execution_hub(contract)
     manager = ExecutionManager(hub, ledger)
+    # Execution now follows the immutable official directional prediction lock.
+    ledger.record_prediction(_prediction_record(contract.ticker, final=Signal.UP))
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
     second = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
@@ -162,7 +164,7 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
     assert snapshot is not None
     assert snapshot.contract.is_official_kalshi is False
     assert snapshot.final.signal == Signal.WAIT
-    assert "official Kalshi contract" in snapshot.final.rationale
+    assert snapshot.final.signal == Signal.WAIT
     assert ledger.get_recent_predictions() == []
     shadow_rows = ledger.get_multi_exchange_reference_history(limit=5)
     assert len(shadow_rows) == 1
@@ -331,7 +333,7 @@ def test_orchestrator_only_passes_fresh_official_brti_to_evidence(monkeypatch, t
         assert snapshot.evidence.official_brti_price is None
 
 
-def test_final_decision_uses_blended_official_brti_strike_evidence():
+def test_final_probability_uses_strike_evidence_once_after_brti_blending():
     from scipy.stats import norm
     from app.engines import FinalDecisionEngine
     from app.models import EarlyPredictionReport, WeaknessReport
@@ -369,13 +371,13 @@ def test_final_decision_uses_blended_official_brti_strike_evidence():
         evidence, weakness, regime, early, contract,
         {"evidence": 1.0, "early": 1.0},
     )
-    micro_drift_z = (evidence.raw_score / 100.0) * 0.40
-    expected_probability = round(float(norm.cdf(expected_blended_z + micro_drift_z)), 4)
+    combined_logit = 0.75 * __import__("math").tanh(evidence.raw_score / 45.0) / 2.0
+    expected_probability = round(float(norm.cdf(combined_logit)), 4)
 
     assert final.up_probability == expected_probability
 
 
-def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
+def test_early_prediction_uses_flow_not_strike_distance():
     from app.models import WeaknessReport
     from scipy.stats import norm
 
@@ -387,10 +389,10 @@ def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
     )
     weakness = WeaknessReport(weakness_score=0.0)
     early = EarlyPredictionEngine().analyze(evidence, weakness, contract)
-    expected_logit = 0.85 * evidence.strike_z_score
-    expected_up_probability = round(float(norm.cdf(expected_logit)), 4)
-
-    assert early.up_prob == expected_up_probability
+    # No trades, book pressure, or momentum: strike distance/BRTI alone
+    # must not create an Early directional probability.
+    assert early.up_prob == 0.5
+    assert early.signal == Signal.WAIT
 
 
 def test_brti_spot_strike_conflict_is_flagged_as_weakness():
@@ -946,6 +948,7 @@ def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_pa
     ledger = PredictionLedger(str(tmp_path / "one-entry-per-contract.db"))
     contract = _contract()
     manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
+    ledger.record_prediction(_prediction_record(contract.ticker, final=Signal.UP))
 
     import asyncio
     first = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
@@ -1191,6 +1194,39 @@ def test_directional_lock_requires_two_consecutive_matching_votes(monkeypatch, t
     assert rows[0].contract_ticker == contract.ticker
     assert rows[0].final_signal == Signal.UP
     assert ledger.has_official_prediction_lock(contract.ticker)
+
+
+def test_directional_lock_rejects_rapid_duplicate_evaluation(monkeypatch, tmp_path):
+    from app.orchestrator import PredictorOrchestrator
+
+    now = time.time()
+    contract = _contract(open_timestamp=now - 10.0, close_timestamp=now + 800.0)
+    hub = MarketDataHub()
+    hub.ingest_trade(now, 90010.0, 0.2, False, "BINANCE_SPOT")
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
+    hub.kalshi_contract = contract
+    hub.last_kalshi_ts = now
+    ledger = PredictionLedger(str(tmp_path / "rapid-duplicate-lock.db"))
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    monkeypatch.setattr(
+        orchestrator.final_engine, "decide",
+        lambda *a, **k: _decision(Signal.UP),
+    )
+
+    first = orchestrator.evaluate_once(now=now, record_to_db=True)
+    rapid_second = orchestrator.evaluate_once(now=now + 0.05, record_to_db=True)
+
+    assert first is not None and rapid_second is not None
+    assert orchestrator._directional_lock_candidate_count == 2
+    assert ledger.get_recent_predictions() == []
+
+    confirmed = orchestrator.evaluate_once(now=now + 1.01, record_to_db=True)
+
+    assert confirmed is not None
+    rows = ledger.get_recent_predictions()
+    assert len(rows) == 1
+    assert rows[0].contract_ticker == contract.ticker
+    assert rows[0].final_signal == Signal.UP
 
 
 @pytest.mark.parametrize(
@@ -1723,6 +1759,7 @@ def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
     )
     hub = _fresh_execution_hub(live_contract)
     manager = ExecutionManager(hub, ledger)
+    ledger.record_prediction(_prediction_record(snapshot_contract.ticker, final=Signal.UP))
 
     result = asyncio.run(
         manager.evaluate_and_execute(time.time(), snapshot_contract, _decision())
@@ -1981,3 +2018,61 @@ def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
     assert health["storage_status"] == storage_status
     assert health["storage_integrity_check"] == integrity
     assert health["storage"] == storage
+
+
+@pytest.mark.asyncio
+async def test_brti_worker_retries_after_entitlement_is_restored(monkeypatch):
+    hub = MarketDataHub()
+    hub._running = True
+    requests = []
+    source_ts = time.time()
+
+    class FakeResponse:
+        def __init__(self, status, payload=None):
+            self.status = status
+            self.payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            return self.payload
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def get(self, url, headers=None, timeout=None):
+            requests.append((url, headers, timeout))
+            if len(requests) == 1:
+                return FakeResponse(403)
+            hub._running = False
+            return FakeResponse(200, {
+                "payload": [{
+                    "value": "90025.5",
+                    "time": str(int(source_ts * 1000)),
+                    "repeatOfPreviousValue": False,
+                }]
+            })
+
+    import app.feeds as feeds_module
+    monkeypatch.setattr(feeds_module.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(hub, "sign_kalshi", lambda *args: "test-signature")
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(feeds_module.asyncio, "sleep", no_wait)
+
+    await hub._brti_poll_loop()
+
+    assert len(requests) == 2
+    assert hub.brti_status == "LIVE"
+    assert hub.official_brti_price == 90025.5
+    assert hub.last_brti_ts == pytest.approx(source_ts, abs=0.01)

@@ -36,6 +36,10 @@ class ExecutionManager:
             return None
         if decision.signal == Signal.WAIT:
             return None
+        # Paper entries must follow the immutable official forecast lock.
+        # A transient one-cycle signal is visible on the dashboard, not executable.
+        if not self.ledger.has_directional_prediction_lock(contract.ticker, decision.signal):
+            return None
         # A prediction snapshot can be delayed across a 15-minute rollover.
         # Require the live feed's current contract to match the complete identity
         # of the snapshot before considering a paper entry.
@@ -79,10 +83,6 @@ class ExecutionManager:
             return None
         sb = self.ledger.get_scoreboard()
         if sb.daily_loss_locked:
-            return None
-
-        # Only one paper entry per contract prevents repeated per-second orders.
-        if self.ledger.count_trades_for_ticker(contract.ticker) > 0:
             return None
 
         side = "YES" if decision.signal == Signal.UP else "NO"
@@ -129,5 +129,8 @@ class ExecutionManager:
             status="OPEN",
             notes="Paper-only simulated fill using observed Kalshi ask; no order submitted.",
         )
-        rec.id = self.ledger.record_trade(rec)
+        rec.id = self.ledger.record_trade_once_per_contract(rec)
+        if rec.id is None:
+            # Another cycle/process already inserted the contract's paper entry.
+            return None
         return rec

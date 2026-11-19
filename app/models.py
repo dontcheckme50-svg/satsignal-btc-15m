@@ -55,6 +55,11 @@ class EvidenceMetrics(BaseModel):
     brti_distance_from_strike: Optional[float] = None
     brti_spot_spread_bps: Optional[float] = None
     brti_conflict: bool = False
+    # Cross-check against an independent USD-quoted exchange composite.
+    reference_price: Optional[float] = None
+    reference_age_seconds: Optional[float] = None
+    reference_spread_bps: Optional[float] = None
+    reference_conflict: bool = False
     # Blended spot/BRTI strike-distance evidence used by the final probability engine.
     # Optional for compatibility with historical observations and older payloads.
     strike_z_score: Optional[float] = None

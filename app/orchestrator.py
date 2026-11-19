@@ -26,6 +26,7 @@ class PredictorOrchestrator:
         self._directional_lock_candidate_ticker: Optional[str] = None
         self._directional_lock_candidate: Signal = Signal.WAIT
         self._directional_lock_candidate_count: int = 0
+        self._directional_lock_candidate_first_ts: Optional[float] = None
         self.last_logged_ts: float = 0.0
         self.last_multi_exchange_logged_ts: float = 0.0
         self.latest_snapshot: Optional[DashboardSnapshot] = None
@@ -51,6 +52,7 @@ class PredictorOrchestrator:
         self._directional_lock_candidate_ticker = None
         self._directional_lock_candidate = Signal.WAIT
         self._directional_lock_candidate_count = 0
+        self._directional_lock_candidate_first_ts = None
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -163,7 +165,7 @@ class PredictorOrchestrator:
         )
         evidence_bids = list(self.hub.bids) if book_fresh else []
         evidence_asks = list(self.hub.asks) if book_fresh else []
-        multi_reference = self.hub.get_multi_exchange_snapshot()
+        multi_reference = self.hub.get_multi_exchange_snapshot(contract_open_ts=new_contract.open_timestamp)
         multi_reference["strike_price"] = new_contract.strike_price
         reference_price = multi_reference.get("reference_price")
         multi_reference["reference_vs_strike_bps"] = (
@@ -185,7 +187,7 @@ class PredictorOrchestrator:
                 logger.exception("Failed to persist multi-exchange shadow observation")
         # Bound bar history by age as well as timestamp; old candles must not
         # leak into momentum, volatility, or regime calculations after feed gaps.
-        observed_bars = [bar for bar in self.hub.bars_1s if new_contract.open_timestamp <= bar[0] and ts - 300.0 <= bar[0] <= ts]
+        observed_bars = [bar for bar in self.hub.bars_1s if new_contract.open_timestamp <= bar[0] and ts - 900.0 <= bar[0] <= ts]
         brti_age = safe_age_seconds(self.hub.last_brti_ts, ts)
         brti_is_fresh = (
             self.hub.brti_status == "LIVE"
@@ -198,6 +200,8 @@ class PredictorOrchestrator:
             observed_bars, evidence_bids, evidence_asks,
             official_brti_price=official_brti_price,
             official_brti_age_sec=brti_age if brti_is_fresh else None,
+            reference_price=reference_price,
+            reference_age_sec=multi_reference.get("reference_age_seconds"),
         )
         weakness = self.weakness_engine.analyze(
             ev, spot_age, book_age, book_source_matches=book_source_matches
@@ -257,15 +261,19 @@ class PredictorOrchestrator:
                     self._directional_lock_candidate_ticker = new_contract.ticker
                     self._directional_lock_candidate = final.signal
                     self._directional_lock_candidate_count = 1
+                    self._directional_lock_candidate_first_ts = ts
             else:
                 self._reset_directional_lock_candidate()
 
             confirmed_direction = (
                 engine_inputs_fresh
+                and new_contract.seconds_remaining > settings.final_lockout_seconds
                 and new_contract.is_official_kalshi
                 and self._directional_lock_candidate_ticker == new_contract.ticker
                 and self._directional_lock_candidate in (Signal.UP, Signal.DOWN)
                 and self._directional_lock_candidate_count >= 2
+                and self._directional_lock_candidate_first_ts is not None
+                and ts - self._directional_lock_candidate_first_ts >= 1.0
                 and final.signal == self._directional_lock_candidate
             )
             at_final_lockout = new_contract.seconds_remaining <= settings.final_lockout_seconds

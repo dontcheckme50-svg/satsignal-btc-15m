@@ -575,3 +575,49 @@ async def test_verified_settlement_requires_exact_requested_market_ticker(
     result = await hub.fetch_verified_kalshi_settlement("KXBTC15M-REQUESTED")
 
     assert result == expected
+
+
+def test_official_settlement_outcome_overrides_conflicting_price_proxy(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "official-result-authority.db"))
+    ticker = "KXBTC15M-OFFICIAL-RESULT-AUTHORITY"
+    # The final forecast is UP, but the authoritative Kalshi result is DOWN.
+    # The supplied price is deliberately above strike to prove it is not used
+    # to override an official market outcome.
+    ledger.record_prediction(_prediction(ticker, 100.0, Signal.UP))
+
+    assert ledger.settle_contract(
+        ticker,
+        settlement_price=90050.0,
+        official_result="DOWN",
+        settlement_source="KALSHI_VERIFIED",
+    ) == 1
+
+    record = ledger.get_recent_predictions(limit=1)[0]
+    scoreboard = ledger.get_scoreboard()
+    assert record.actual_outcome == "DOWN"
+    assert record.settlement_price == pytest.approx(90050.0)
+    assert record.final_won is False
+    assert scoreboard.final_scored == 1
+    assert scoreboard.final_wins == 0
+    assert scoreboard.final_losses == 1
+
+
+def test_orchestrator_final_lockout_blocks_direction_even_if_engine_emits_up(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "orchestrator-independent-cutoff.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-INDEPENDENT-CUTOFF", now, remaining=64.0)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    orchestrator.final_engine.decide = lambda *args: _final_report(Signal.UP)
+
+    _evaluate_sequence(
+        orchestrator, hub, contract.ticker, now, [Signal.UP, Signal.UP],
+        remaining=64.0,
+    )
+
+    records = ledger.get_recent_predictions(limit=10)
+    assert len(records) == 1
+    assert records[0].final_signal == Signal.WAIT
+    assert records[0].confidence == 0.0
+    assert records[0].up_prob == pytest.approx(0.5)
+    assert records[0].down_prob == pytest.approx(0.5)

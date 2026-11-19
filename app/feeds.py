@@ -56,13 +56,27 @@ class MarketDataHub:
         self._private_key = self._load_kalshi_key()
 
     def _load_kalshi_key(self):
-        if not settings.kalshi_key_id or not settings.kalshi_private_key_path:
+        if not settings.kalshi_key_id:
+            self.brti_detail = "Kalshi key ID is not configured"
             return None
         try:
-            with open(settings.kalshi_private_key_path, "rb") as f:
-                return serialization.load_pem_private_key(f.read(), password=None)
+            pem_bytes = None
+            if settings.kalshi_private_key:
+                pem_bytes = settings.kalshi_private_key.replace("\\n", "\n").encode("utf-8")
+            elif settings.kalshi_private_key_path:
+                with open(settings.kalshi_private_key_path, "rb") as f:
+                    pem_bytes = f.read()
+            else:
+                self.brti_detail = "Private key missing: configure KALSHI_PRIVATE_KEY_PATH or KALSHI_PRIVATE_KEY"
+                return None
+            if not pem_bytes or b"-----BEGIN " not in pem_bytes:
+                self.brti_detail = "Private key format invalid: expected PEM contents"
+                return None
+            return serialization.load_pem_private_key(pem_bytes, password=None)
         except Exception as e:
-            self.brti_detail = f"Key load error: {e}"
+            # Do not expose filesystem paths, PEM contents, or secret values in status.
+            self.brti_detail = f"Key load error: {type(e).__name__}"
+            logger.error("Kalshi private key could not be loaded (%s)", type(e).__name__)
             return None
 
     def sign_kalshi(self, ts_ms: str, method: str, path: str) -> str:
@@ -179,8 +193,8 @@ class MarketDataHub:
             runtime["state"] = "STOPPED"
         await self.multi_exchange.stop()
 
-    def get_multi_exchange_snapshot(self) -> dict:
-        snapshot = self.multi_exchange.get_snapshot()
+    def get_multi_exchange_snapshot(self, contract_open_ts: Optional[float] = None) -> dict:
+        snapshot = self.multi_exchange.get_snapshot(since_ts=contract_open_ts)
         now = time.time()
         primary_age = safe_age_seconds(self.last_spot_ts, now)
         brti_age = safe_age_seconds(self.last_brti_ts, now)
@@ -452,8 +466,12 @@ class MarketDataHub:
                             else:
                                 self.brti_status, self.brti_detail = "INVALID_DATA", "No valid, fresh BRTI value with a source timestamp was returned"
                         elif resp.status in (401, 403):
-                            self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
-                            break
+                            self.brti_status, self.brti_detail = "UNAVAILABLE", "BRTI access unavailable (authentication or entitlement); retrying in 30s"
+                            # Entitlements and credentials can be corrected while the
+                            # service is running. Keep the official feed worker alive
+                            # and periodically re-check; never substitute spot data.
+                            await asyncio.sleep(30.0)
+                            continue
                         else:
                             self.brti_status, self.brti_detail = "UNAVAILABLE", f"Kalshi BRTI HTTP {resp.status}"
                 except asyncio.CancelledError:

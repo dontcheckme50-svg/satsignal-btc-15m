@@ -1,0 +1,112 @@
+name: Isolated SATSIGNAL repair tests
+
+on:
+  push:
+    branches:
+      - feed-repair-isolated-v1
+  pull_request:
+    branches:
+      - reliability-isolation-v1
+
+# A push and its matching PR event otherwise queue duplicate full test matrices.
+# Keep only the newest validation for this repair branch.
+concurrency:
+  group: satsignal-repair-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile application and tests
+        run: python -m compileall -q app tests
+      - name: Run complete test suite
+        run: python -m pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production container image
+        run: docker build --pull -t satsignal-btc-15m:ci .
+      - name: Smoke-test container startup and health endpoints
+        shell: bash
+        run: |
+          docker volume create satsignal-ci-data
+          docker run -d --name satsignal-ci -p 8000:8000 -v satsignal-ci-data:/data satsignal-btc-15m:ci
+          cleanup() {
+            docker logs satsignal-ci || true
+            docker rm -f satsignal-ci || true
+            docker volume rm satsignal-ci-data || true
+          }
+          trap cleanup EXIT
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          def get_json(path):
+              with urllib.request.urlopen(f"http://127.0.0.1:8000{path}", timeout=2) as response:
+                  return json.load(response)
+
+          health = None
+          for _ in range(45):
+              try:
+                  health = get_json("/api/health")
+                  break
+              except Exception:
+                  time.sleep(1)
+
+          assert health is not None, "container did not become healthy"
+          assert health["status"] == "ok"
+          assert health["trading_mode"] == "paper"
+          assert health["persistent_storage_required"] is True
+          assert health["persistent_storage"]["persistent_mount_confirmed"] is True
+          storage = get_json("/api/storage/health")
+          assert storage["integrity_check"] == "ok"
+          print("Container startup and persistent storage mount check passed")
+
+          # Write a marker, replace the container, and verify the same named
+          # volume still contains the record after the restart.
+          import subprocess
+          subprocess.run([
+              "docker", "exec", "satsignal-ci", "python", "-c",
+              "import sqlite3; c=sqlite3.connect('/data/satsignal_btc15m.db'); "
+              "c.execute('CREATE TABLE IF NOT EXISTS restart_probe (value TEXT)'); "
+              "c.execute('INSERT INTO restart_probe VALUES (?)', ('survives',)); "
+              "c.commit(); c.close()"
+          ], check=True)
+          subprocess.run(["docker", "rm", "-f", "satsignal-ci"], check=True)
+          subprocess.run([
+              "docker", "run", "-d", "--name", "satsignal-ci", "-p", "8000:8000",
+              "-v", "satsignal-ci-data:/data", "satsignal-btc-15m:ci"
+          ], check=True)
+
+          restarted = None
+          for _ in range(45):
+              try:
+                  restarted = get_json("/api/health")
+                  break
+              except Exception:
+                  time.sleep(1)
+          assert restarted is not None, "replacement container did not become healthy"
+          assert restarted["persistent_storage"]["persistent_mount_confirmed"] is True
+          subprocess.run([
+              "docker", "exec", "satsignal-ci", "python", "-c",
+              "import sqlite3; c=sqlite3.connect('/data/satsignal_btc15m.db'); "
+              "rows=c.execute('SELECT value FROM restart_probe').fetchall(); "
+              "assert rows == [('survives',)], rows; c.close()"
+          ], check=True)
+          print("SQLite record survived container replacement on persistent volume")
+          PY

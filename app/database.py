@@ -362,6 +362,19 @@ class PredictionLedger:
             ).fetchone()
             return row is not None
 
+    def has_directional_prediction_lock(self, contract_ticker: str, signal: Signal) -> bool:
+        """Require a matching immutable official directional lock before paper entry."""
+        if signal not in (Signal.UP, Signal.DOWN):
+            return False
+        with self._connection() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM predictions
+                   WHERE contract_ticker = ? AND is_official_lock = 1
+                     AND final_signal = ? LIMIT 1""",
+                (contract_ticker, signal.value),
+            ).fetchone()
+            return row is not None
+
     def record_prediction_observation(self, contract_ticker: str, epoch_ts: float, seconds_remaining: float, payload: dict) -> int:
         with self._connection() as conn:
             cur = conn.execute(
@@ -403,9 +416,31 @@ class PredictionLedger:
             )
             return int(cur.lastrowid)
 
+    def record_trade_once_per_contract(self, tr: TradeRecord) -> Optional[int]:
+        """Atomically insert at most one paper trade for a contract ticker."""
+        with self._connection(immediate=True) as conn:
+            existing = conn.execute(
+                "SELECT id FROM trades WHERE contract_ticker = ? LIMIT 1",
+                (tr.contract_ticker,),
+            ).fetchone()
+            if existing is not None:
+                return None
+            cur = conn.execute(
+                """INSERT INTO trades (
+                    mode, contract_ticker, timestamp_iso, side, contracts,
+                    entry_price, quote_source, fee_paid, fair_prob_at_entry,
+                    net_edge, status, pnl_usd, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (tr.mode, tr.contract_ticker, tr.timestamp_iso, tr.side, tr.contracts,
+                 tr.entry_price, tr.quote_source, tr.fee_paid, tr.fair_prob_at_entry,
+                 tr.net_edge, tr.status, tr.pnl_usd, tr.notes),
+            )
+            return int(cur.lastrowid)
+
     def get_unsettled_contract_tickers(self) -> List[str]:
-        # Reconcile both official forecast locks and open paper trades. A trade
-        # can legitimately open before the two-vote forecast lock exists.
+        # Reconcile both official forecast locks and open paper trades.
+        # Paper entries now require a matching immutable directional lock, but
+        # retaining the trade query also recovers any legacy open paper rows.
         # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
             rows = conn.execute(
