@@ -8,6 +8,9 @@ on:
       - "requirements.txt"
       - "scripts/check_postgres_connection.py"
       - "app/postgres_schema.py"
+      - "app/postgres_database.py"
+      - "app/main.py"
+      - "tests/test_postgres_database_compat.py"
       - "scripts/inspect_postgres_schema.py"
       - "tests/test_inspect_postgres_schema.py"
       - "tests/test_postgres_schema.py"
@@ -39,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Run connectivity probe unit tests
-        run: python -m pytest -q tests/test_postgres_connection_probe.py tests/test_postgres_schema.py tests/test_inspect_postgres_schema.py
+        run: python -m pytest -q tests/test_postgres_connection_probe.py tests/test_postgres_schema.py tests/test_inspect_postgres_schema.py tests/test_postgres_database_compat.py
       - name: Test Supabase PostgreSQL login (read-only)
         if: ${{ env.SUPABASE_DATABASE_URL != '' }}
         env:
