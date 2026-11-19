@@ -52,6 +52,7 @@ def _fresh_execution_hub(contract):
     hub.live_price = 90010.0
     hub.last_spot_ts = now
     hub.active_spot_source = "TEST_LIVE"
+    hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)], source="TEST_LIVE")
     hub.last_kalshi_ts = now
     hub.kalshi_contract = contract
     return hub
@@ -1668,3 +1669,23 @@ def test_regime_engine_receives_only_active_contract_bars(monkeypatch, tmp_path)
     assert snapshot is not None
     assert captured["bars"]
     assert all(bar[0] >= contract.open_timestamp for bar in captured["bars"])
+
+
+@pytest.mark.parametrize("book_failure", ["missing", "stale", "source_mismatch"])
+def test_execution_refuses_missing_stale_or_misaligned_spot_book(tmp_path, book_failure):
+    ledger = PredictionLedger(str(tmp_path / f"execution-book-{book_failure}.db"))
+    contract = _contract()
+    hub = _fresh_execution_hub(contract)
+    if book_failure == "missing":
+        hub.bids, hub.asks = [], []
+        hub.last_book_ts = 0.0
+    elif book_failure == "stale":
+        hub.last_book_ts = time.time() - settings.stale_feed_threshold_sec - 1.0
+    else:
+        hub.last_book_source = "OLD_SPOT_SOURCE"
+    manager = ExecutionManager(hub, ledger)
+
+    result = asyncio.run(manager.evaluate_and_execute(time.time(), contract, _decision()))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
