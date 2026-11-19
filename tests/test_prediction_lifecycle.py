@@ -440,3 +440,87 @@ def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine
     assert orchestrator._directional_lock_candidate_count == 0
     assert not ledger.has_official_prediction_lock(contract.ticker)
     assert ledger.get_scoreboard().total_predictions == 0
+
+
+def test_late_old_contract_settlement_does_not_change_new_contract_score_or_trade(tmp_path):
+    from app.models import TradeRecord
+
+    ledger = PredictionLedger(str(tmp_path / "late-old-settlement.db"))
+    old_ticker = "KXBTC15M-OLD-LATE-SETTLE"
+    new_ticker = "KXBTC15M-NEW-STILL-OPEN"
+
+    ledger.record_prediction(_prediction(old_ticker, 100.0, Signal.UP))
+    ledger.record_prediction(_prediction(new_ticker, 200.0, Signal.DOWN))
+    old_trade_id = ledger.record_trade(TradeRecord(
+        mode="paper", contract_ticker=old_ticker,
+        timestamp_iso="2027-01-01 00:00:00 UTC", side="YES",
+        contracts=1, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01, fair_prob_at_entry=0.70, net_edge=0.49,
+        status="OPEN", notes="Older contract paper trade",
+    ))
+    new_trade_id = ledger.record_trade(TradeRecord(
+        mode="paper", contract_ticker=new_ticker,
+        timestamp_iso="2027-01-01 00:15:00 UTC", side="NO",
+        contracts=1, entry_price=0.30, quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01, fair_prob_at_entry=0.70, net_edge=0.39,
+        status="OPEN", notes="Newer contract paper trade",
+    ))
+
+    assert ledger.settle_contract(
+        old_ticker, settlement_price=None, official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    ) == 1
+
+    predictions = {p.contract_ticker: p for p in ledger.get_recent_predictions(limit=10)}
+    assert predictions[old_ticker].settled is True
+    assert predictions[old_ticker].actual_outcome == "UP"
+    assert predictions[old_ticker].final_won is True
+    assert predictions[new_ticker].settled is False
+    assert predictions[new_ticker].actual_outcome is None
+
+    trades = {t.id: t for t in ledger.get_recent_trades(limit=10)}
+    assert trades[old_trade_id].status == "SETTLED"
+    assert trades[old_trade_id].pnl_usd == pytest.approx(0.79)
+    assert trades[new_trade_id].status == "OPEN"
+    assert trades[new_trade_id].pnl_usd == pytest.approx(0.0)
+
+    scoreboard = ledger.get_scoreboard()
+    assert scoreboard.total_predictions == 2
+    assert scoreboard.pending_predictions == 1
+    assert scoreboard.final_scored == 1
+    assert scoreboard.final_wins == 1
+    assert scoreboard.final_losses == 0
+    assert scoreboard.total_trades == 2
+    assert scoreboard.realized_pnl_usd == pytest.approx(0.79)
+
+    # A repeated late reconciliation cannot double-settle the old row or P&L.
+    assert ledger.settle_contract(
+        old_ticker, settlement_price=None, official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    ) == 0
+    assert ledger.get_scoreboard().realized_pnl_usd == pytest.approx(0.79)
+    assert ledger.get_scoreboard().pending_predictions == 1
+    assert {t.id: t for t in ledger.get_recent_trades(limit=10)}[new_trade_id].status == "OPEN"
+
+
+def test_price_only_settlement_without_contract_strike_leaves_trade_open(tmp_path):
+    from app.models import TradeRecord
+
+    ledger = PredictionLedger(str(tmp_path / "trade-without-strike.db"))
+    ticker = "KXBTC15M-TRADE-NO-STRIKE"
+    trade_id = ledger.record_trade(TradeRecord(
+        mode="paper", contract_ticker=ticker,
+        timestamp_iso="2027-01-01 00:00:00 UTC", side="YES",
+        contracts=1, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
+        fee_paid=0.01, fair_prob_at_entry=0.70, net_edge=0.49,
+        status="OPEN", notes="No official prediction row or stored strike",
+    ))
+
+    assert ledger.settle_contract(
+        ticker, settlement_price=91000.0, official_result=None,
+        settlement_source="SPOT_CLOSE_PROXY",
+    ) == 0
+
+    trade = next(t for t in ledger.get_recent_trades(limit=10) if t.id == trade_id)
+    assert trade.status == "OPEN"
+    assert trade.pnl_usd == pytest.approx(0.0)
