@@ -42,7 +42,20 @@ app = FastAPI(title="SATSIGNAL BTC 15M API", version="2.0.0", lifespan=lifespan)
 
 @app.get("/api/health")
 async def get_health():
-    return {"status": "ok", "uptime_seconds": round(time.time() - START_TIME, 1), "server_time_iso": iso_now(), "trading_mode": settings.trading_mode, "has_live_snapshot": orchestrator.latest_snapshot is not None}
+    # Keep the process liveness response HTTP 200 so a transient storage
+    # diagnostic does not trigger an unnecessary host restart. Storage health
+    # is reported independently and in detail for operators.
+    storage = ledger.get_storage_health()
+    return {
+        "status": "ok",
+        "uptime_seconds": round(time.time() - START_TIME, 1),
+        "server_time_iso": iso_now(),
+        "trading_mode": settings.trading_mode,
+        "has_live_snapshot": orchestrator.latest_snapshot is not None,
+        "storage_status": storage.get("status", "UNKNOWN"),
+        "storage_integrity_check": storage.get("integrity_check", "UNKNOWN"),
+        "storage": storage,
+    }
 
 
 @app.get("/api/storage/health")
