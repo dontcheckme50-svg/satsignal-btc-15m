@@ -22,13 +22,25 @@ class _CursorCompat:
     def __init__(self, cursor):
         self._cursor = cursor
         self.lastrowid = None
+        self._first = None
+        self._has_first = False
+        self._returning_without_row = False
 
     @property
     def rowcount(self):
+        # PostgreSQL reports driver rowcount for RETURNING statements. A
+        # conflict/no-op has no returned row and must behave like SQLite's
+        # INSERT OR IGNORE rowcount=0 so callers take their duplicate lookup.
+        if self._returning_without_row:
+            return 0
         return self._cursor.rowcount
 
     def fetchone(self):
-        row = self._cursor.fetchone()
+        if self._has_first:
+            self._has_first = False
+            row = self._first
+        else:
+            row = self._cursor.fetchone()
         if row is not None and "id" in row:
             self.lastrowid = row["id"]
         return row
@@ -76,10 +88,10 @@ class _ConnectionCompat:
         if "RETURNING id" in statement.upper():
             row = cur.fetchone()
             wrapped.lastrowid = row["id"] if row else None
-            # Preserve rowcount and expose the consumed RETURNING row as fetchone().
+            wrapped._returning_without_row = row is None
+            # Expose the consumed RETURNING row to callers exactly once.
             wrapped._first = row
-        else:
-            wrapped._first = None
+            wrapped._has_first = row is not None
         return wrapped
 
     def cursor(self):
