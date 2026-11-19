@@ -146,6 +146,21 @@ class PredictorOrchestrator:
             and book_age <= settings.stale_feed_threshold_sec
             and book_source_matches
         )
+        kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, ts)
+        official_contract_fresh = bool(
+            new_contract.is_official_kalshi
+            and kalshi_age is not None
+            and kalshi_age <= 12.0
+        )
+        # This is the single actionability gate for directional locks and
+        # dashboard engine status. A patched/failed downstream engine must
+        # never be able to turn stale cached data into an official direction.
+        engine_inputs_fresh = bool(
+            spot_age is not None
+            and spot_age <= settings.stale_feed_threshold_sec
+            and book_fresh
+            and official_contract_fresh
+        )
         evidence_bids = list(self.hub.bids) if book_fresh else []
         evidence_asks = list(self.hub.asks) if book_fresh else []
         multi_reference = self.hub.get_multi_exchange_snapshot()
@@ -232,7 +247,7 @@ class PredictorOrchestrator:
         if record_to_db:
             if not new_contract.is_official_kalshi or self.ledger.has_official_prediction_lock(new_contract.ticker):
                 self._reset_directional_lock_candidate()
-            elif final.signal in (Signal.UP, Signal.DOWN):
+            elif final.signal in (Signal.UP, Signal.DOWN) and engine_inputs_fresh:
                 if (
                     self._directional_lock_candidate_ticker == new_contract.ticker
                     and self._directional_lock_candidate == final.signal
@@ -246,7 +261,8 @@ class PredictorOrchestrator:
                 self._reset_directional_lock_candidate()
 
             confirmed_direction = (
-                new_contract.is_official_kalshi
+                engine_inputs_fresh
+                and new_contract.is_official_kalshi
                 and self._directional_lock_candidate_ticker == new_contract.ticker
                 and self._directional_lock_candidate in (Signal.UP, Signal.DOWN)
                 and self._directional_lock_candidate_count >= 2
@@ -286,17 +302,14 @@ class PredictorOrchestrator:
         # status must also disclose whether the underlying live inputs are usable.
         # In particular, live_price remains cached during a spot-feed outage;
         # a recent snapshot timestamp must not make that cached price look fresh.
-        engine_inputs_fresh = bool(
-            spot_age is not None
-            and spot_age <= settings.stale_feed_threshold_sec
-            and book_fresh
-        )
         engine_input_health = {
             "contract_ticker": new_contract.ticker,
             "evaluated_at_ts": ts,
             "spot_age_seconds": None if spot_age is None else round(spot_age, 3),
             "book_age_seconds": None if book_age is None else round(book_age, 3),
             "book_source_matches_spot": book_source_matches,
+            "kalshi_age_seconds": None if kalshi_age is None else round(kalshi_age, 3),
+            "official_contract_fresh": official_contract_fresh,
             "fresh": engine_inputs_fresh,
         }
         engine_block_status = "ACTIVE" if engine_inputs_fresh else "BLOCKED_STALE_INPUT"
