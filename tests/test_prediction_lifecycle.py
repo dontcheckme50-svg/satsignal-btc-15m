@@ -524,3 +524,54 @@ def test_price_only_settlement_without_contract_strike_leaves_trade_open(tmp_pat
     trade = next(t for t in ledger.get_recent_trades(limit=10) if t.id == trade_id)
     assert trade.status == "OPEN"
     assert trade.pnl_usd == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "response_ticker,expected",
+    [
+        ("KXBTC15M-REQUESTED", ("UP", None)),
+        ("KXBTC15M-DIFFERENT", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_verified_settlement_requires_exact_requested_market_ticker(
+    monkeypatch, response_ticker, expected
+):
+    import app.feeds as feeds_module
+
+    market = {
+        "ticker": response_ticker,
+        "status": "settled",
+        "result": "yes",
+        "expiration_value": None,
+    }
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def json(self):
+            return {"market": market}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get(self, _url, timeout):
+            assert timeout == 6
+            return FakeResponse()
+
+    monkeypatch.setattr(feeds_module.aiohttp, "ClientSession", lambda: FakeSession())
+    hub = MarketDataHub()
+
+    result = await hub.fetch_verified_kalshi_settlement("KXBTC15M-REQUESTED")
+
+    assert result == expected
