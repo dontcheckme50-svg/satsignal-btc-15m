@@ -201,3 +201,42 @@ def test_final_probability_is_directionally_symmetric():
 
     assert abs(up_result.up_probability - down_result.down_probability) < 0.001
     assert abs(up_result.down_probability - down_result.up_probability) < 0.001
+
+
+def test_radar_evidence_direction_flips_with_opposite_contract_price_and_flow():
+    now = float(int(time.time()))
+    contract = _contract().model_copy(update={
+        "open_timestamp": now - 780.0,
+        "close_timestamp": now + 120.0,
+        "seconds_remaining": 120.0,
+    })
+
+    def analyze_direction(upward: bool):
+        start = int(contract.open_timestamp)
+        end = int(now)
+        start_price = 64000.0
+        finish_price = 64100.0 if upward else 63900.0
+        bars = [
+            (ts, start_price + (finish_price - start_price) * ((ts - start) / (end - start)), 1.0)
+            for ts in range(start, end + 1)
+        ]
+        trades = [
+            (now - 55.0 + i * 5.0, finish_price, 0.2, not upward)
+            for i in range(12)
+        ]
+        bids = [(finish_price - 1.0, 20.0), (finish_price - 2.0, 15.0)]
+        asks = [(finish_price + 1.0, 2.0), (finish_price + 2.0, 1.0)]
+        if not upward:
+            bids, asks = asks, bids
+        return EvidenceEngine().analyze(
+            now, finish_price, contract, trades, bars, bids, asks,
+        )
+
+    up = analyze_direction(True)
+    down = analyze_direction(False)
+
+    assert up.signal == Signal.UP
+    assert down.signal == Signal.DOWN
+    assert up.raw_score > 0
+    assert down.raw_score < 0
+    assert abs(up.raw_score + down.raw_score) < 1.0
