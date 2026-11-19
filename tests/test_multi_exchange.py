@@ -354,3 +354,46 @@ def test_trade_flow_snapshot_ignores_malformed_records():
     assert flow["windows"]["15"]["buy_volume_btc"] == 0.5
     assert flow["windows"]["15"]["sell_volume_btc"] == 0.0
     assert flow["windows"]["15"]["trade_count"] == 1
+
+ 
+def test_ticker_bbo_bootstraps_venue_without_stale_depth():
+    reference = MultiExchangeReference()
+    reference.coinbase.bids = {99.0: 100.0}
+    reference.coinbase.asks = {102.0: 100.0}
+    now = time.time()
+
+    assert reference._ingest_top_of_book(reference.coinbase, 100.0, 101.0, 2.0, 3.0, now)
+    snapshot = reference.coinbase.snapshot(now)
+
+    assert snapshot["status"] == "LIVE"
+    assert snapshot["mid"] == 100.5
+    assert snapshot["levels"] == 1
+    assert snapshot["bid_depth"] == 200.0
+    assert snapshot["ask_depth"] == 303.0
+
+
+@pytest.mark.parametrize("values", [
+    (101.0, 100.0, 1.0, 1.0),
+    (100.0, 101.0, 0.0, 1.0),
+    (100.0, 101.0, 1.0, float("nan")),
+])
+def test_ticker_bbo_rejects_crossed_or_invalid_values(values):
+    reference = MultiExchangeReference()
+    now = time.time()
+
+    assert not reference._ingest_top_of_book(reference.kraken, *values, now)
+    assert reference.kraken.bids == {}
+    assert reference.kraken.asks == {}
+
+
+def test_two_usd_venues_create_reference_while_usdt_binance_remains_excluded():
+    reference = MultiExchangeReference()
+    _book(reference.coinbase, 90000, 90010, 5.0)
+    _book(reference.kraken, 90002, 90012, 3.0)
+    _book(reference.binance, 92000, 92010, 8.0)
+
+    snapshot = reference.get_snapshot()
+
+    assert snapshot["status"] == "LIVE"
+    assert set(snapshot["included_venues"]) == {"COINBASE", "KRAKEN"}
+    assert "BINANCE" not in snapshot["included_venues"]
