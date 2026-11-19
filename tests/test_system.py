@@ -1951,3 +1951,33 @@ def test_storage_health_reports_corruption_or_unavailable_database_without_crash
     assert health["status"] == "UNAVAILABLE"
     assert health["integrity_check"] == "ERROR"
     assert health["error_type"] == "OperationalError"
+
+
+@pytest.mark.parametrize(
+    ("storage_status", "integrity", "error_type"),
+    [
+        ("HEALTHY", "ok", None),
+        ("UNAVAILABLE", "ERROR", "OperationalError"),
+    ],
+)
+def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
+    monkeypatch, storage_status, integrity, error_type
+):
+    import importlib
+
+    main_module = importlib.import_module("app.main")
+    storage = {
+        "status": storage_status,
+        "storage_type": "FILE",
+        "integrity_check": integrity,
+    }
+    if error_type:
+        storage["error_type"] = error_type
+    monkeypatch.setattr(main_module.ledger, "get_storage_health", lambda: storage)
+
+    health = asyncio.run(main_module.get_health())
+
+    assert health["status"] == "ok"
+    assert health["storage_status"] == storage_status
+    assert health["storage_integrity_check"] == integrity
+    assert health["storage"] == storage
