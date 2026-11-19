@@ -44,3 +44,38 @@ def test_settlement_reads_receive_row_locks():
     )
     assert prediction_sql.endswith("FOR UPDATE")
     assert trade_sql.endswith("FOR UPDATE")
+
+
+class _FakeCursor:
+    def __init__(self, row, rowcount):
+        self._row = row
+        self.rowcount = rowcount
+    def fetchone(self):
+        row, self._row = self._row, None
+        return row
+    def fetchall(self):
+        return []
+
+
+class _FakeConnection:
+    def __init__(self, row, rowcount):
+        self.cursor = _FakeCursor(row, rowcount)
+    def execute(self, statement, params=()):
+        return self.cursor
+
+
+def test_ignored_insert_without_returned_id_has_zero_rowcount():
+    from app.postgres_database import _ConnectionCompat
+    conn = _ConnectionCompat(_FakeConnection(None, 1))
+    cur = conn.execute("INSERT OR IGNORE INTO predictions (contract_ticker) VALUES (?)", ("T",))
+    assert cur.lastrowid is None
+    assert cur.rowcount == 0
+
+
+def test_insert_with_returned_id_preserves_id_and_row():
+    from app.postgres_database import _ConnectionCompat
+    conn = _ConnectionCompat(_FakeConnection({"id": 42}, 1))
+    cur = conn.execute("INSERT INTO trades (contract_ticker) VALUES (?)", ("T",))
+    assert cur.lastrowid == 42
+    assert cur.rowcount == 1
+    assert cur.fetchone() == {"id": 42}
