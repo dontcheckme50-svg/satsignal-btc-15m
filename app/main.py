@@ -4,7 +4,7 @@ from typing import Optional, Set
 import uvicorn
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from app.config import settings
+from app.config import settings, storage_mount_status, persistent_storage_required
 from app.database import PredictionLedger
 from app.feeds import MarketDataHub, iso_now
 from app.models import DashboardSnapshot
@@ -55,12 +55,19 @@ async def get_health():
         "storage_status": storage.get("status", "UNKNOWN"),
         "storage_integrity_check": storage.get("integrity_check", "UNKNOWN"),
         "storage": storage,
+        "persistent_storage": storage_mount_status,
+        "persistent_storage_required": persistent_storage_required,
     }
 
 
 @app.get("/api/storage/health")
 async def get_storage_health():
-    return ledger.get_storage_health()
+    storage = ledger.get_storage_health()
+    return {
+        **storage,
+        "persistent_storage": storage_mount_status,
+        "persistent_storage_required": persistent_storage_required,
+    }
 
 @app.get("/api/orchestrator/health")
 async def get_orchestrator_health():
