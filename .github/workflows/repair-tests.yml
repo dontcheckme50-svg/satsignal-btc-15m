@@ -40,3 +40,37 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build production container image
         run: docker build --pull -t satsignal-btc-15m:ci .
+      - name: Smoke-test container startup and health endpoints
+        shell: bash
+        run: |
+          docker run -d --name satsignal-ci -p 8000:8000 satsignal-btc-15m:ci
+          cleanup() {
+            docker logs satsignal-ci || true
+            docker rm -f satsignal-ci || true
+          }
+          trap cleanup EXIT
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          def get_json(path):
+              with urllib.request.urlopen(f"http://127.0.0.1:8000{path}", timeout=2) as response:
+                  return json.load(response)
+
+          health = None
+          for _ in range(45):
+              try:
+                  health = get_json("/api/health")
+                  break
+              except Exception:
+                  time.sleep(1)
+
+          assert health is not None, "container did not become healthy"
+          assert health["status"] == "ok"
+          assert health["trading_mode"] == "paper"
+          assert health["persistent_storage_required"] is False
+          storage = get_json("/api/storage/health")
+          assert storage["integrity_check"] == "ok"
+          print("Container startup and storage health smoke test passed")
+          PY
