@@ -208,6 +208,10 @@ class MarketDataHub:
                 async with session.get(url, timeout=6) as resp:
                     if resp.status != 200: return None
                     m = (await resp.json()).get("market", {})
+                    # The settlement must belong to the exact requested
+                    # contract; never grade a ticker from a mismatched payload.
+                    if m.get("ticker") != ticker:
+                        return None
                     if m.get("status") == "settled" and m.get("result") in ("yes", "no"):
                         return ("UP" if m["result"] == "yes" else "DOWN"), (float(m["expiration_value"]) if m.get("expiration_value") is not None else None)
         except Exception:
