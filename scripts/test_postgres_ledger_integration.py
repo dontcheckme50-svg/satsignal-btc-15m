@@ -151,8 +151,12 @@ if __name__ == "__main__":
         elif isinstance(exc, RuntimeError) and str(exc).startswith("SAFE_SCHEMA_GUARD:"):
             print(str(exc))
         elif isinstance(exc, psycopg.Error):
-            # SQLSTATE and primary diagnostic only; never print connection info or query params.
-            print(f"SAFE_DB_DIAGNOSTIC: sqlstate={exc.sqlstate}; message={exc.diag.message_primary}")
+            # Expose only a short, credential-scrubbed driver message; never query params.
+            safe_message = str(exc)[:300]
+            safe_message = re.sub(r"(?i)postgres(?:ql)?://\\S+", "[redacted-connection]", safe_message)
+            safe_message = re.sub(r"(?i)(password|passfile)=\\S+", r"\\1=[redacted]", safe_message)
+            safe_message = safe_message.replace("\\n", " ")
+            print(f"SAFE_DB_DIAGNOSTIC: class={type(exc).__name__}; sqlstate={exc.sqlstate}; message={safe_message}")
         # Print source locations only; never print exception text or connection details.
         for frame in traceback.extract_tb(exc.__traceback__):
             print(f"  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
