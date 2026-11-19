@@ -72,7 +72,15 @@ class EvidenceEngine:
             and abs(dist / contract.strike_price * 10000.0) >= 0.5
             and abs(float(brti_distance) / contract.strike_price * 10000.0) >= 0.5
         )
-        raw_score = float(np.clip(((buy_pct - 50.0) / 50.0) * 30.0 + (0.65 * obi + 0.35 * large_bias) * 25.0 + (mom_score / 100.0) * 25.0 + float(np.clip(strike_z * 12.0, -20.0, 20.0)), -100.0, 100.0))
+        # Evidence raw_score is deliberately tape/microstructure-only.
+        # Strike distance (including official BRTI) is supplied separately to
+        # FinalDecisionEngine; mixing it here would count location twice.
+        raw_score = float(np.clip(
+            ((buy_pct - 50.0) / 50.0) * 30.0
+            + (0.65 * obi + 0.35 * large_bias) * 25.0
+            + (mom_score / 100.0) * 25.0,
+            -80.0, 80.0,
+        ))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
         return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6))
 
@@ -244,7 +252,10 @@ class FinalDecisionEngine:
                 contract.seconds_remaining, ev.volatility_annualized,
             )
         )
-        micro_drift_z = ((ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)) + ((early.up_prob - 0.5) * 0.45 * weights.get("early", 1.0))
+        # Probability receives one tape-derived microstructure adjustment.
+        # Early is retained as an independent directional confirmation/veto,
+        # not added again as a second copy of the same flow evidence.
+        micro_drift_z = (ev.raw_score / 100.0) * 0.40 * weights.get("evidence", 1.0)
         raw_up_prob = float(np.clip(norm.cdf(z_terminal + micro_drift_z), 0.02, 0.98))
         shrink = min(0.70, weakness.weakness_score / 130.0)
         up_prob = round(0.5 + (raw_up_prob - 0.5) * (1.0 - shrink), 4)
