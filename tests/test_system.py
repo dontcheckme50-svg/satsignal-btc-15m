@@ -2014,3 +2014,61 @@ def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
     assert health["storage_status"] == storage_status
     assert health["storage_integrity_check"] == integrity
     assert health["storage"] == storage
+
+
+@pytest.mark.asyncio
+async def test_brti_worker_retries_after_entitlement_is_restored(monkeypatch):
+    hub = MarketDataHub()
+    hub._running = True
+    requests = []
+    source_ts = time.time()
+
+    class FakeResponse:
+        def __init__(self, status, payload=None):
+            self.status = status
+            self.payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            return self.payload
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def get(self, url, headers=None, timeout=None):
+            requests.append((url, headers, timeout))
+            if len(requests) == 1:
+                return FakeResponse(403)
+            hub._running = False
+            return FakeResponse(200, {
+                "payload": [{
+                    "value": "90025.5",
+                    "time": str(int(source_ts * 1000)),
+                    "repeatOfPreviousValue": False,
+                }]
+            })
+
+    import app.feeds as feeds_module
+    monkeypatch.setattr(feeds_module.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(hub, "sign_kalshi", lambda *args: "test-signature")
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(feeds_module.asyncio, "sleep", no_wait)
+
+    await hub._brti_poll_loop()
+
+    assert len(requests) == 2
+    assert hub.brti_status == "LIVE"
+    assert hub.official_brti_price == 90025.5
+    assert hub.last_brti_ts == pytest.approx(source_ts, abs=0.01)
