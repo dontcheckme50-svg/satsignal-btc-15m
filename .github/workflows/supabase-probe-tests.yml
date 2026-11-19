@@ -1,0 +1,66 @@
+name: Supabase connectivity probe tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - reliability-isolation-v1
+    paths:
+      - "requirements.txt"
+      - "scripts/check_postgres_connection.py"
+      - "app/postgres_schema.py"
+      - "app/postgres_database.py"
+      - "app/main.py"
+      - "scripts/test_postgres_ledger_integration.py"
+      - "tests/test_postgres_database_compat.py"
+      - "scripts/inspect_postgres_schema.py"
+      - "tests/test_inspect_postgres_schema.py"
+      - "tests/test_postgres_schema.py"
+      - "tests/test_postgres_connection_probe.py"
+      - ".github/workflows/supabase-probe-tests.yml"
+  push:
+    branches:
+      - supabase-connectivity-probe-v1
+    paths:
+      - "requirements.txt"
+      - "scripts/check_postgres_connection.py"
+      - "app/postgres_database.py"
+      - "app/postgres_schema.py"
+      - "tests/test_postgres_database_compat.py"
+      - "scripts/test_postgres_ledger_integration.py"
+      - "tests/test_postgres_connection_probe.py"
+      - ".github/workflows/supabase-probe-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe-tests:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run connectivity probe unit tests
+        run: python -m pytest -q tests
+      - name: Test Supabase PostgreSQL login (read-only)
+        if: ${{ env.SUPABASE_DATABASE_URL != '' }}
+        run: python scripts/check_postgres_connection.py
+      - name: Test PostgreSQL ledger in an isolated temporary schema
+        if: ${{ env.SUPABASE_DATABASE_URL != '' }}
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: python scripts/test_postgres_ledger_integration.py
+      - name: Inspect existing Supabase schema (read-only)
+        if: ${{ env.SUPABASE_DATABASE_URL }}
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: python scripts/inspect_postgres_schema.py
