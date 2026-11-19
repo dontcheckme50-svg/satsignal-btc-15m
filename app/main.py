@@ -103,8 +103,8 @@ async def get_feeds():
 
 @app.get("/api/multi-exchange")
 async def get_multi_exchange():
-    snapshot = hub.get_multi_exchange_snapshot()
     contract = orchestrator.active_contract
+    snapshot = hub.get_multi_exchange_snapshot(contract_open_ts=contract.open_timestamp if contract else None)
     snapshot["strike_price"] = contract.strike_price if contract else None
     reference_price = snapshot.get("reference_price")
     snapshot["reference_vs_strike_bps"] = (
