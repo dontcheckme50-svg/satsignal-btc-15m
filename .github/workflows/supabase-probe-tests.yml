@@ -10,6 +10,7 @@ on:
       - "app/postgres_schema.py"
       - "app/postgres_database.py"
       - "app/main.py"
+      - "scripts/test_postgres_ledger_integration.py"
       - "tests/test_postgres_database_compat.py"
       - "scripts/inspect_postgres_schema.py"
       - "tests/test_inspect_postgres_schema.py"
@@ -22,6 +23,10 @@ on:
     paths:
       - "requirements.txt"
       - "scripts/check_postgres_connection.py"
+      - "app/postgres_database.py"
+      - "app/postgres_schema.py"
+      - "tests/test_postgres_database_compat.py"
+      - "scripts/test_postgres_ledger_integration.py"
       - "tests/test_postgres_connection_probe.py"
       - ".github/workflows/supabase-probe-tests.yml"
 
@@ -48,6 +53,11 @@ jobs:
         env:
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
         run: python scripts/check_postgres_connection.py
+      - name: Test PostgreSQL ledger in an isolated temporary schema
+        if: ${{ env.SUPABASE_DATABASE_URL != '' }}
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: python scripts/test_postgres_ledger_integration.py
       - name: Inspect existing Supabase schema (read-only)
         if: ${{ env.SUPABASE_DATABASE_URL }}
         env:
