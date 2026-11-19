@@ -3,6 +3,7 @@ import aiohttp
 import json
 import math
 import time
+from datetime import datetime, timezone
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
@@ -149,6 +150,28 @@ class MultiExchangeReference:
         self.binance = VenueBook("BINANCE", "USDT")
         self._running = False
         self._tasks = []
+
+    @staticmethod
+    def _event_timestamp(value, fallback: float) -> float:
+        """Parse exchange event time (seconds, milliseconds, or ISO-8601)."""
+        if value is None:
+            return float(fallback)
+        try:
+            if isinstance(value, (int, float)) or str(value).strip().replace(".", "", 1).isdigit():
+                parsed = float(value)
+                if parsed > 1e12:
+                    parsed /= 1000.0
+            else:
+                text_value = str(value).strip()
+                if text_value.endswith("Z"):
+                    text_value = text_value[:-1] + "+00:00"
+                parsed_dt = datetime.fromisoformat(text_value)
+                if parsed_dt.tzinfo is None:
+                    parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                parsed = parsed_dt.timestamp()
+            return parsed if math.isfinite(parsed) and parsed > 0 else float(fallback)
+        except (TypeError, ValueError, OverflowError):
+            return float(fallback)
 
     @staticmethod
     def _coinbase_aggressor_side(maker_side: str) -> str:
@@ -302,14 +325,16 @@ class MultiExchangeReference:
                                 self.coinbase.last_book_ts = now
                         elif typ == "match" and msg.get("product_id") == "BTC-USD":
                             p, q = float(msg["price"]), float(msg["size"])
+                            event_ts = self._event_timestamp(msg.get("time"), now)
                             # Coinbase match side is maker-side; invert to aggressor side.
                             aggressor_side = self._coinbase_aggressor_side(msg.get("side"))
-                            self.coinbase.ingest_trade(now, p, q, aggressor_side)
+                            self.coinbase.ingest_trade(event_ts, p, q, aggressor_side)
                         elif typ == "ticker" and msg.get("product_id") == "BTC-USD":
                             self._ingest_top_of_book(
                                 self.coinbase,
                                 msg.get("best_bid"), msg.get("best_ask"),
-                                msg.get("best_bid_size"), msg.get("best_ask_size"), now,
+                                msg.get("best_bid_size"), msg.get("best_ask_size"),
+                                self._event_timestamp(msg.get("time"), now),
                             )
             except asyncio.CancelledError:
                 raise
@@ -365,13 +390,15 @@ class MultiExchangeReference:
                         elif channel == "trade":
                             for trade in data_rows:
                                 p, q = float(trade["price"]), float(trade["qty"])
-                                self.kraken.ingest_trade(now, p, q, str(trade.get("side", "")).lower())
+                                event_ts = self._event_timestamp(trade.get("timestamp"), now)
+                                self.kraken.ingest_trade(event_ts, p, q, str(trade.get("side", "")).lower())
                         elif channel == "ticker":
                             for ticker in data_rows:
                                 self._ingest_top_of_book(
                                     self.kraken,
                                     ticker.get("bid"), ticker.get("ask"),
-                                    ticker.get("bid_qty"), ticker.get("ask_qty"), now,
+                                    ticker.get("bid_qty"), ticker.get("ask_qty"),
+                                    self._event_timestamp(ticker.get("timestamp"), now),
                                 )
             except asyncio.CancelledError:
                 raise
