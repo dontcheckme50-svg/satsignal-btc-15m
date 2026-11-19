@@ -237,9 +237,30 @@ class MultiExchangeReference:
                     self.binance.reconnects += 1
                     await asyncio.sleep(1.5)
 
+    @staticmethod
+    def _ingest_top_of_book(venue: VenueBook, bid, ask, bid_qty, ask_qty, ts: float) -> bool:
+        """Use a validated ticker BBO as a safe bootstrap when a depth snapshot is delayed."""
+        try:
+            bid, ask = float(bid), float(ask)
+            bid_qty, ask_qty = float(bid_qty), float(ask_qty)
+            ts = float(ts)
+        except (TypeError, ValueError):
+            return False
+        if not all(math.isfinite(v) for v in (bid, ask, bid_qty, ask_qty, ts)):
+            return False
+        if bid <= 0 or ask <= bid or bid_qty <= 0 or ask_qty <= 0 or ts <= 0 or ts > time.time() + 0.5:
+            return False
+        # Replace, rather than merge, cached depth: ticker BBO is not a full snapshot.
+        venue.bids = {bid: bid_qty}
+        venue.asks = {ask: ask_qty}
+        venue.last_book_ts = ts
+        venue.connected = True
+        venue.last_error = None
+        return True
+
     async def _coinbase_loop(self):
         url = "wss://ws-feed.exchange.coinbase.com"
-        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "matches"]}
+        subscribe = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["level2", "matches", "ticker"]}
         while self._running:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
@@ -283,6 +304,12 @@ class MultiExchangeReference:
                             # Coinbase match side is maker-side; invert to aggressor side.
                             aggressor_side = self._coinbase_aggressor_side(msg.get("side"))
                             self.coinbase.ingest_trade(now, p, q, aggressor_side)
+                        elif typ == "ticker" and msg.get("product_id") == "BTC-USD":
+                            self._ingest_top_of_book(
+                                self.coinbase,
+                                msg.get("best_bid"), msg.get("best_ask"),
+                                msg.get("best_bid_size"), msg.get("best_ask_size"), now,
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -301,11 +328,13 @@ class MultiExchangeReference:
         url = "wss://ws.kraken.com/v2"
         subscribe_book = {"method": "subscribe", "params": {"channel": "book", "symbol": ["BTC/USD"], "depth": 10}}
         subscribe_trades = {"method": "subscribe", "params": {"channel": "trade", "symbol": ["BTC/USD"]}}
+        subscribe_ticker = {"method": "subscribe", "params": {"channel": "ticker", "symbol": ["BTC/USD"]}}
         while self._running:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
                     await ws.send(json.dumps(subscribe_book))
                     await ws.send(json.dumps(subscribe_trades))
+                    await ws.send(json.dumps(subscribe_ticker))
                     self.kraken.connected = True
                     self.kraken.last_error = None
                     async for raw in ws:
@@ -336,6 +365,13 @@ class MultiExchangeReference:
                             for trade in data_rows:
                                 p, q = float(trade["price"]), float(trade["qty"])
                                 self.kraken.ingest_trade(now, p, q, str(trade.get("side", "")).lower())
+                        elif channel == "ticker":
+                            for ticker in data_rows:
+                                self._ingest_top_of_book(
+                                    self.kraken,
+                                    ticker.get("bid"), ticker.get("ask"),
+                                    ticker.get("bid_qty"), ticker.get("ask_qty"), now,
+                                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
