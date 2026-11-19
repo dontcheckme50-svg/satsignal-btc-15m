@@ -20,6 +20,21 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 9. Do not treat HTTP 200 or a dashboard snapshot as proof that the official market contract is valid. Confirm the ticker begins `KXBTC15M`, strike source is `KALSHI_OFFICIAL`, and contract close time is in the future.
 10. Let it collect verified settlements and paper observations before evaluating predictive performance. No profitability claim is made.
 
+## SQLite persistence verification (required before production)
+
+SQLite can survive Hostless restarts only when its database file is inside a Hostless persistent volume. Docker's `RUN mkdir -p /data` creates a directory; it does not make that directory persistent.
+
+1. Attach a persistent Hostless volume at `/data` only if its price is explicitly approved. Do not create a paid volume without approval.
+2. Confirm the Hostless volume is mounted and writable at `/data`.
+3. Set `PREDICTOR_DB_PATH=/data/satsignal_btc15m.db`.
+4. Set `PREDICTOR_STORAGE_MOUNT=/data`.
+5. Set `PREDICTOR_REQUIRE_PERSISTENT_STORAGE=1`. With this enabled, startup fails closed if the mount is missing, read-only, or the SQLite path is outside it. This prevents the app from quietly accepting writes to disposable container storage.
+6. Verify `/api/storage/health` reports `persistent_mount_confirmed: true` and `status: PERSISTENT_MOUNT_CONFIRMED` under `persistent_storage`.
+7. Write a test prediction/trade in a non-production test environment, restart/redeploy the Hostless app, then verify the same record IDs and scoreboard totals remain. Repeat at least three times.
+8. If the mount cannot be confirmed, do not treat the app as production-ready. The app may run in development mode with persistence marked unverified, but records are not guaranteed across container replacement.
+
+The automated regression suite also starts separate Python processes against one shared directory and verifies SQLite rows remain readable after three process restarts. This tests SQLite/process restart behavior; only a real Hostless restart with an attached persistent volume can verify Hostless volume retention.
+
 ## Data integrity notes
 
 - Prediction records are scored only after the official Kalshi settlement fetch verifies the contract outcome.
