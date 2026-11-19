@@ -168,3 +168,33 @@ def test_atomic_trade_insert_allows_only_one_concurrent_contract_entry(tmp_path)
 
     assert sum(result is not None for result in results) == 1
     assert len(ledger.get_recent_trades(limit=20)) == 1
+
+@pytest.mark.asyncio
+async def test_opposite_signal_after_directional_lock_never_executes(tmp_path, monkeypatch):
+    now = 1800000000.0
+    monkeypatch.setattr("app.execution.time.time", lambda: now)
+    ledger = PredictionLedger(str(tmp_path / "locked-up-current-down.db"))
+    contract = _contract(now)
+    ledger.record_prediction(_record_lock(contract.ticker, Signal.UP))
+    manager = ExecutionManager(_ready_hub(contract, now), ledger)
+
+    result = await manager.evaluate_and_execute(now, contract, _decision(Signal.DOWN))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
+
+
+@pytest.mark.asyncio
+async def test_directional_lock_for_another_contract_cannot_authorize_entry(tmp_path, monkeypatch):
+    now = 1800000000.0
+    monkeypatch.setattr("app.execution.time.time", lambda: now)
+    ledger = PredictionLedger(str(tmp_path / "wrong-contract-lock.db"))
+    contract = _contract(now, ticker="KXBTC15M-CURRENT")
+    ledger.record_prediction(_record_lock("KXBTC15M-PREVIOUS", Signal.UP))
+    manager = ExecutionManager(_ready_hub(contract, now), ledger)
+
+    result = await manager.evaluate_and_execute(now, contract, _decision(Signal.UP))
+
+    assert result is None
+    assert ledger.get_recent_trades() == []
+
