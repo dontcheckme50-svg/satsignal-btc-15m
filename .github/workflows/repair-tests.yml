@@ -8,6 +8,12 @@ on:
     branches:
       - reliability-isolation-v1
 
+# A push and its matching PR event otherwise queue duplicate full test matrices.
+# Keep only the newest validation for this repair branch.
+concurrency:
+  group: satsignal-repair-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
