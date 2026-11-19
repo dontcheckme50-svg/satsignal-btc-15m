@@ -143,6 +143,8 @@ if __name__ == "__main__":
         if isinstance(exc, AssertionError) and str(exc):
             # Only our explicitly sanitized assertion diagnostics are emitted.
             print(f"SAFE_ASSERTION_DETAIL: {exc}")
+        elif isinstance(exc, RuntimeError) and str(exc).startswith("SAFE_SCHEMA_GUARD:"):
+            print(str(exc))
         # Print source locations only; never print exception text or connection details.
         for frame in traceback.extract_tb(exc.__traceback__):
             print(f"  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
