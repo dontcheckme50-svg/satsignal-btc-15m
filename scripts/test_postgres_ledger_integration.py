@@ -150,6 +150,9 @@ if __name__ == "__main__":
             print(f"SAFE_ASSERTION_DETAIL: {exc}")
         elif isinstance(exc, RuntimeError) and str(exc).startswith("SAFE_SCHEMA_GUARD:"):
             print(str(exc))
+        elif isinstance(exc, psycopg.Error):
+            # SQLSTATE and primary diagnostic only; never print connection info or query params.
+            print(f"SAFE_DB_DIAGNOSTIC: sqlstate={exc.sqlstate}; message={exc.diag.message_primary}")
         # Print source locations only; never print exception text or connection details.
         for frame in traceback.extract_tb(exc.__traceback__):
             print(f"  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
