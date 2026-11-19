@@ -439,9 +439,15 @@ class PredictionLedger:
                     yes_won = pred_row["actual_outcome"] == "UP"
                 elif official_result in ("UP", "DOWN"):
                     yes_won = official_result == "UP"
+                elif pred_row is not None and settlement_price is not None:
+                    # A price-only proxy can grade a trade only when this
+                    # contract's own official prediction row supplies its strike.
+                    # Never treat the settlement price itself as the strike.
+                    yes_won = float(settlement_price) >= float(pred_row["strike_price"])
                 else:
-                    strike = float(pred_row["strike_price"]) if pred_row else settlement_price
-                    yes_won = settlement_price >= strike
+                    # Without an official outcome or this contract's strike,
+                    # the trade remains OPEN for a later verified reconciliation.
+                    continue
                 won = (tr["side"] == "YES" and yes_won) or (tr["side"] == "NO" and not yes_won)
                 payout = float(tr["contracts"]) * 1.0 if won else 0.0
                 cost = (float(tr["contracts"]) * float(tr["entry_price"])) + float(tr["fee_paid"])
