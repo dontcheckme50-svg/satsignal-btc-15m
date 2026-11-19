@@ -33,3 +33,10 @@ jobs:
         run: python -m compileall -q app tests
       - name: Run complete test suite
         run: python -m pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production container image
+        run: docker build --pull -t satsignal-btc-15m:ci .
