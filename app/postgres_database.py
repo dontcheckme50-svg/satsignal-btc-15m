@@ -45,6 +45,8 @@ class _ConnectionCompat:
     @staticmethod
     def _sql(sql: str) -> tuple[str, bool]:
         statement = sql.strip()
+        if statement.upper() == "BEGIN IMMEDIATE":
+            statement = "BEGIN"
         ignored_insert = bool(re.match(r"INSERT\s+OR\s+IGNORE\s+INTO", statement, re.I))
         if ignored_insert:
             statement = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", statement, count=1, flags=re.I)
