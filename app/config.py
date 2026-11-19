@@ -31,3 +31,19 @@ class Settings:
     port: int = int(os.getenv("PORT", "8000"))
 
 settings = Settings()
+
+# Production can fail closed unless Hostless confirms a writable persistent mount.
+# Leave disabled for local development and CI; enable it in the Hostless app only
+# after a durable volume is actually attached at PREDICTOR_STORAGE_MOUNT.
+from app.storage_guard import enforce_persistent_storage
+
+storage_mount_path = os.getenv("PREDICTOR_STORAGE_MOUNT", "/data")
+persistent_storage_required = os.getenv(
+    "PREDICTOR_REQUIRE_PERSISTENT_STORAGE", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
+storage_mount_status = enforce_persistent_storage(
+    settings.db_path,
+    storage_mount_path,
+    required=persistent_storage_required,
+)
+
