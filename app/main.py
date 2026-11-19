@@ -254,6 +254,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
   </div>
+  <div class="card" style="margin-bottom:12px;">
+    <h3>Production Storage & Data Integrity <span id="storage-health-status" style="color:var(--wait)">CHECKING</span></h3>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:0;">
+      <div>
+        <div class="kv"><span>Active Backend</span><span id="storage-backend">--</span></div>
+        <div class="kv"><span>Database File</span><span id="storage-file">--</span></div>
+        <div class="kv"><span>Journal Mode</span><span id="storage-journal">--</span></div>
+      </div>
+      <div>
+        <div class="kv"><span>Integrity Check</span><span id="storage-integrity">--</span></div>
+        <div class="kv"><span>Persistent Volume</span><span id="storage-persistence">--</span></div>
+        <div class="kv"><span>Database Size</span><span id="storage-size">--</span></div>
+      </div>
+      <div>
+        <div class="kv"><span>Prediction Records</span><span id="storage-predictions">--</span></div>
+        <div class="kv"><span>Radar Observations</span><span id="storage-observations">--</span></div>
+        <div class="kv"><span>Paper Trades / Exchange</span><span id="storage-trades-exchange">--</span></div>
+      </div>
+    </div>
+    <div class="rationale" id="storage-note">Live read-only storage diagnostics. This panel does not change the active database or prediction logic.</div>
+  </div>
   <div class="card" style="margin-bottom:12px;"><h3>Paper Execution Ledger</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Mode</th><th>Contract</th><th>Side</th><th>Qty</th><th>Entry</th><th>Quote Source</th><th>Fee</th><th>Edge</th><th>Status</th><th>P&L</th></tr></thead><tbody id="trades-body"></tbody></table></div></div>
   <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Record</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
 <script>
@@ -389,6 +410,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       marketEl.style.color = "var(--wait)";
     }
   }
+  async function fetchStorageHealth() {
+    const statusEl = document.getElementById("storage-health-status");
+    const set = (id, value) => { document.getElementById(id).textContent = value == null ? "--" : String(value); };
+    try {
+      const res = await fetch("/api/storage/health", {cache:"no-store"});
+      if (!res.ok) throw new Error("Storage health endpoint unavailable");
+      const h = await res.json();
+      const counts = h.record_counts || {};
+      const persistent = h.persistent_storage || {};
+      const healthy = h.status === "HEALTHY" && h.integrity_check === "ok";
+      statusEl.textContent = h.status || "UNKNOWN";
+      statusEl.style.color = healthy ? "var(--up)" : "var(--down)";
+      set("storage-backend", h.storage_type === "FILE" ? "SQLITE (FILE)" : (h.storage_type || "UNKNOWN"));
+      set("storage-file", h.database_file_exists ? "PRESENT" : "NOT VERIFIED");
+      set("storage-journal", h.journal_mode || "--");
+      set("storage-integrity", h.integrity_check || "--");
+      set("storage-persistence", persistent.persistent_mount_confirmed ? "CONFIRMED" : "UNVERIFIED");
+      set("storage-size", h.database_size_bytes != null ? (Number(h.database_size_bytes)/1048576).toFixed(2)+" MB" : "--");
+      set("storage-predictions", counts.predictions ?? 0);
+      set("storage-observations", counts.prediction_observations ?? 0);
+      set("storage-trades-exchange", (counts.trades ?? 0)+" / "+(counts.multi_exchange_reference ?? 0));
+      document.getElementById("storage-note").textContent = persistent.persistent_mount_confirmed
+        ? "SQLite remains the active production store. Database integrity and persistent volume are verified."
+        : "SQLite remains the active production store. Database diagnostics are live; durable volume persistence is not confirmed by the host.";
+    } catch(e) {
+      statusEl.textContent = "UNAVAILABLE";
+      statusEl.style.color = "var(--down)";
+      document.getElementById("storage-note").textContent = "Storage diagnostics could not be loaded. No storage settings were changed.";
+    }
+  }
   async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
   function connectWS() {
     const wsEl = document.getElementById("ws-status");
@@ -397,7 +448,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500);
+  fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); fetchStorageHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500); setInterval(fetchStorageHealth, 5000);
 </script>
 </body>
 </html>"""
