@@ -161,22 +161,3 @@ class PostgresPredictionLedger(PredictionLedger):
             ).fetchall()
             return [r["contract_ticker"] for r in rows]
 
-    def settle_contract(self, contract_ticker, settlement_price, official_result=None, settlement_source="SPOT_CLOSE_PROXY"):
-        # Serialize settlement workers on the contract's prediction and trade rows.
-        if official_result not in ("UP", "DOWN"):
-            try:
-                settlement_price = float(settlement_price)
-            except (TypeError, ValueError, OverflowError):
-                return 0
-            if not __import__("math").isfinite(settlement_price) or settlement_price <= 0:
-                return 0
-        with self._connection() as conn:
-            conn.execute(
-                "SELECT id FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 FOR UPDATE",
-                (contract_ticker,),
-            ).fetchall()
-            conn.execute(
-                "SELECT id FROM trades WHERE contract_ticker = ? AND status = 'OPEN' FOR UPDATE",
-                (contract_ticker,),
-            ).fetchall()
-        return super().settle_contract(contract_ticker, settlement_price, official_result, settlement_source)
