@@ -1,5 +1,16 @@
 from app.engines import EvidenceEngine
-from tests.test_system import _contract
+from app.models import ContractInfo
+
+
+def _contract(open_timestamp: float, seconds_remaining: float) -> ContractInfo:
+    return ContractInfo(
+        ticker="TEST-BTC-15M", strike_price=90000.0,
+        strike_source="KALSHI_OFFICIAL", open_timestamp=open_timestamp,
+        close_timestamp=open_timestamp + 900.0,
+        seconds_remaining=seconds_remaining,
+        checkpoint_seconds_remaining=60.0,
+        is_official_kalshi=True,
+    )
 
 
 def test_valid_brti_changes_strike_probability_not_tape_evidence_score():
