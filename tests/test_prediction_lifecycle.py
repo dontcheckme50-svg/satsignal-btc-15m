@@ -26,6 +26,9 @@ def _ready_hub(contract: ContractInfo, now: float, price: float = 90010.0):
     hub.live_price = price
     hub.last_spot_ts = now
     hub.active_spot_source = "TEST_LIVE"
+    hub.bids, hub.asks = [(price - 1.0, 2.0)], [(price + 1.0, 2.0)]
+    hub.last_book_ts = now
+    hub.last_book_source = "TEST_LIVE"
     hub.kalshi_contract = contract
     hub.last_kalshi_ts = now
     return hub
@@ -403,3 +406,27 @@ def test_rollover_feed_outage_cannot_carry_lock_confirmation_and_recovers_once(t
     assert len(records) == 2
     assert {record.contract_ticker for record in records} == {first.ticker, second.ticker}
     assert ledger.get_scoreboard().total_predictions == 2
+
+
+def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine_signals_up(tmp_path):
+    from app.config import settings
+
+    ledger = PredictionLedger(str(tmp_path / "stale-directional-lock.db"))
+    now = 1_800_000_000.0
+    contract = _official_contract("KXBTC15M-STALE-DIRECTION", now, remaining=500.0)
+    hub = _ready_hub(contract, now)
+    orchestrator = PredictorOrchestrator(hub, ledger)
+    # Simulate a downstream engine bug or override that emits UP despite
+    # degraded inputs. The orchestrator's independent lock gate must stop it.
+    orchestrator.final_engine.decide = lambda *args: _final_report(Signal.UP)
+
+    hub.last_spot_ts = now - settings.stale_feed_threshold_sec - 1.0
+    stale = orchestrator.evaluate_once(now=now)
+
+    assert stale is not None
+    assert stale.final.signal == Signal.UP  # the mocked engine's output is visible
+    assert stale.engines.engine_e_final["status"] == "BLOCKED_STALE_INPUT"
+    assert stale.engines.engine_e_final["input_health"]["fresh"] is False
+    assert orchestrator._directional_lock_candidate_count == 0
+    assert not ledger.has_official_prediction_lock(contract.ticker)
+    assert ledger.get_scoreboard().total_predictions == 0
