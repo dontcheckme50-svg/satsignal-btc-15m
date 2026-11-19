@@ -69,7 +69,17 @@ def main() -> int:
         observations = ledger.get_recent_prediction_observations(
             limit=10, contract_ticker=prediction.contract_ticker
         )
-        assert len(observations) == 1 and observations[0]["payload"]["test"] is True
+        if not (
+            len(observations) == 1
+            and isinstance(observations[0].get("payload"), dict)
+            and observations[0]["payload"].get("test") is True
+        ):
+            payload = observations[0].get("payload") if observations else None
+            safe_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+            raise AssertionError(
+                f"observation_count={len(observations)}; "
+                f"payload_type={type(payload).__name__}; payload_keys={safe_keys}"
+            )
 
         trade_id = ledger.record_trade(TradeRecord(
             mode="paper",
