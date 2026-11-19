@@ -181,29 +181,55 @@ class RegimeEngine:
 class EarlyPredictionEngine:
     def analyze(self, ev: EvidenceMetrics, weakness: WeaknessReport, contract: ContractInfo) -> EarlyPredictionReport:
         in_early_window = max(0.0, 900.0 - contract.seconds_remaining) <= settings.early_window_seconds
-        # Reuse the shared strike-distance evidence so Early and Final do not
-        # reason from different price benchmarks. Older observations without
-        # the optional field retain the original spot-only calculation.
-        z_strike = (
-            float(ev.strike_z_score)
-            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
-            else EvidenceEngine._strike_z_score(
-                ev.live_price, contract.strike_price,
-                contract.seconds_remaining, ev.volatility_annualized,
-            )
+
+        # This engine is intentionally independent of strike-distance probability.
+        # FinalDecisionEngine already models distance-to-strike; reusing it here
+        # would count the same price-location evidence twice and inflate confidence.
+        # Use only short-horizon tape, momentum, order-book and structure evidence.
+        delta_scale = max(0.75, abs(ev.trade_delta_60s) + 0.75)
+        flow_component = math.tanh(ev.trade_delta_60s / delta_scale)
+        pressure_component = (ev.buying_pressure_pct - ev.selling_pressure_pct) / 100.0
+        momentum_component = float(np.clip(ev.momentum_score / 100.0, -1.0, 1.0))
+        structure_component = (
+            1.0 if ev.structure_bias == "BULLISH_HH_HL"
+            else -1.0 if ev.structure_bias == "BEARISH_LH_LL"
+            else 0.0
         )
-        early_logit = (0.85 * z_strike) + (0.65 * math.tanh(ev.cvd_contract / 4.0)) + (0.35 * ev.orderbook_imbalance)
-        if weakness.absorption_detected: early_logit *= 0.45
+        # Keep the model bounded and symmetric so absent/neutral evidence cannot
+        # create a default UP bias.
+        early_logit = (
+            0.55 * flow_component
+            + 0.35 * pressure_component
+            + 0.40 * momentum_component
+            + 0.20 * structure_component
+            + 0.20 * float(np.clip(ev.orderbook_imbalance, -1.0, 1.0))
+        )
+        if weakness.absorption_detected:
+            early_logit *= 0.45
+        if weakness.momentum_fading:
+            early_logit *= 0.70
+        penalty_factor = 1.0 - min(0.65, max(0.0, weakness.weakness_score) / 140.0)
+        early_logit *= penalty_factor
+
         up_prob = round(float(np.clip(norm.cdf(early_logit), 0.05, 0.95)), 4)
         down_prob = round(1.0 - up_prob, 4)
-        confidence = round(max(50.0, (max(up_prob, down_prob) * 100.0) - (weakness.weakness_score * 0.15)), 1)
+        confidence = round(max(up_prob, down_prob) * 100.0, 1)
         if weakness.feed_degraded or confidence < 55.0:
-            sig, rationale = Signal.WAIT, "Early window lacks clean opening impulse or strike separation."
+            sig, rationale = Signal.WAIT, "Early flow evidence is weak or market feeds are degraded."
         elif up_prob > 0.5:
-            sig, rationale = Signal.UP, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor upside."
+            sig, rationale = Signal.UP, (
+                f"Independent early tape evidence favors upside "
+                f"(60s delta {ev.trade_delta_60s:+.3f}, momentum {ev.momentum_score:+.1f})."
+            )
         else:
-            sig, rationale = Signal.DOWN, f"Opening CVD ({ev.cvd_contract:+.2f} BTC) & strike Z-score ({z_strike:+.2f}) favor downside."
-        return EarlyPredictionReport(active_window=in_early_window, signal=sig, confidence=confidence, up_prob=up_prob, down_prob=down_prob, rationale=rationale)
+            sig, rationale = Signal.DOWN, (
+                f"Independent early tape evidence favors downside "
+                f"(60s delta {ev.trade_delta_60s:+.3f}, momentum {ev.momentum_score:+.1f})."
+            )
+        return EarlyPredictionReport(
+            active_window=in_early_window, signal=sig, confidence=confidence,
+            up_prob=up_prob, down_prob=down_prob, rationale=rationale
+        )
 
 class FinalDecisionEngine:
     def decide(self, ev: EvidenceMetrics, weakness: WeaknessReport, regime: RegimeReport, early: EarlyPredictionReport, contract: ContractInfo, weights: dict) -> FinalDecisionReport:
