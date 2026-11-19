@@ -31,7 +31,11 @@ class _CursorCompat:
         # PostgreSQL reports driver rowcount for RETURNING statements. A
         # conflict/no-op has no returned row and must behave like SQLite's
         # INSERT OR IGNORE rowcount=0 so callers take their duplicate lookup.
-        if self._returning_without_row:
+        if self._returning_without_row or self.lastrowid is None:
+            return 0
+        try:
+            int(self.lastrowid)
+        except (TypeError, ValueError, OverflowError):
             return 0
         return self._cursor.rowcount
 
