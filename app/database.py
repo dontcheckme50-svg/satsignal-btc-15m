@@ -11,16 +11,24 @@ class PredictionLedger:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # Each operation owns its connection. A bounded busy timeout absorbs
+        # brief overlap between the prediction, settlement, and API workers.
+        conn = sqlite3.connect(
+            self.db_path, timeout=15.0, check_same_thread=False
+        )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
     @contextmanager
-    def _connection(self):
+    def _connection(self, immediate: bool = False):
         conn = self._connect()
         try:
+            if immediate:
+                # Settlement reads and writes must share one reserved write
+                # transaction so two reconcilers cannot grade the same trade.
+                conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -31,6 +39,9 @@ class PredictionLedger:
 
     def _init_db(self) -> None:
         with self._connection() as conn:
+            # WAL is persistent database state; configure it during initialization,
+            # not on every short-lived read connection.
+            conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS predictions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -417,7 +428,7 @@ class PredictionLedger:
                 settlement_price = None
             if settlement_price is not None and (not math.isfinite(settlement_price) or settlement_price <= 0):
                 settlement_price = None
-        with self._connection() as conn:
+        with self._connection(immediate=True) as conn:
             rows = conn.execute("SELECT * FROM predictions WHERE contract_ticker = ? AND is_official_lock = 1 AND settled = 0", (contract_ticker,)).fetchall()
             updated = 0
             for r in rows:
