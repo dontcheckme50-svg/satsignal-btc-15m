@@ -356,6 +356,28 @@ def test_trade_flow_snapshot_ignores_malformed_records():
     assert flow["windows"]["15"]["trade_count"] == 1
 
  
+def test_validated_ticker_bbo_updates_ticker_and_book_freshness():
+    reference = MultiExchangeReference()
+    venue = reference.coinbase
+    now = time.time()
+
+    accepted = reference._ingest_top_of_book(
+        venue, "90000", "90001", "2", "3", now
+    )
+
+    assert accepted is True
+    assert venue.last_book_ts == now
+    assert venue.last_ticker_ts == now
+
+    previous_ticker_ts = venue.last_ticker_ts
+    rejected = reference._ingest_top_of_book(
+        venue, "90002", "90001", "2", "3", now + 0.1
+    )
+
+    assert rejected is False
+    assert venue.last_ticker_ts == previous_ticker_ts
+
+
 def test_ticker_bbo_bootstraps_venue_without_stale_depth():
     reference = MultiExchangeReference()
     reference.coinbase.bids = {99.0: 100.0}
