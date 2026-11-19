@@ -35,8 +35,13 @@ def main() -> int:
     try:
         admin.execute(f'CREATE SCHEMA "{schema}"')
         admin.commit()
-        # PostgreSQL options set the search_path for every ledger connection.
-        test_url = database_url + ("&" if "?" in database_url else "?") + f"options=-csearch_path%3D{schema}"
+        # Build a libpq connection string with a correctly spaced -c option.
+        # The old URI form omitted the space after -c, so libpq ignored it and
+        # silently fell back to public. make_conninfo safely encodes the value.
+        test_url = psycopg.conninfo.make_conninfo(
+            database_url,
+            options=f"-c search_path={schema}",
+        )
 
         # Prove every new pooled connection resolves this unique schema before
         # allowing the ledger constructor to create or write any tables.
