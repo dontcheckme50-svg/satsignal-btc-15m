@@ -82,3 +82,31 @@ def test_migration_requires_destination_directory_to_exist(tmp_path):
 
     assert source.is_file()
     assert not destination.exists()
+
+
+def test_migration_includes_committed_rows_still_in_source_wal(tmp_path):
+    source = tmp_path / "live-wal.db"
+    destination = tmp_path / "persistent" / "satsignal_btc15m.db"
+    destination.parent.mkdir()
+    source_conn = sqlite3.connect(source)
+    try:
+        source_conn.execute("PRAGMA journal_mode=WAL")
+        source_conn.execute(
+            "CREATE TABLE predictions (id INTEGER PRIMARY KEY, contract_ticker TEXT)"
+        )
+        source_conn.execute(
+            "INSERT INTO predictions VALUES (1, 'KXBTC15M-WAL')"
+        )
+        source_conn.commit()
+        assert (tmp_path / "live-wal.db-wal").exists()
+
+        result = migrate_database(str(source), str(destination))
+
+        assert result["status"] == "verified"
+        assert result["row_counts"]["predictions"] == 1
+        with sqlite3.connect(destination) as migrated:
+            assert migrated.execute(
+                "SELECT contract_ticker FROM predictions"
+            ).fetchall() == [("KXBTC15M-WAL",)]
+    finally:
+        source_conn.close()
