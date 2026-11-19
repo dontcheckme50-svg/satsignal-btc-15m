@@ -1,4 +1,4 @@
-import sqlite3, json, math
+import os, sqlite3, json, math
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -156,6 +156,38 @@ class PredictionLedger:
             if "reference_vs_strike_bps" not in reference_columns:
                 conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN reference_vs_strike_bps REAL")
 
+
+    def get_storage_health(self) -> dict:
+        """Report whether the configured SQLite store is file-backed and readable."""
+        try:
+            with self._connection() as conn:
+                journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
+                integrity_row = conn.execute("PRAGMA quick_check(1)").fetchone()
+                integrity = str(integrity_row[0]) if integrity_row else "UNKNOWN"
+                counts = {}
+                for table in ("predictions", "prediction_observations", "trades", "multi_exchange_reference"):
+                    counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            is_memory = self.db_path == ":memory:" or "mode=memory" in self.db_path
+            file_exists = False if is_memory else os.path.isfile(self.db_path)
+            file_size = os.path.getsize(self.db_path) if file_exists else 0
+            healthy = integrity == "ok" and journal_mode == "WAL" and (is_memory or file_exists)
+            return {
+                "status": "HEALTHY" if healthy else "DEGRADED",
+                "storage_type": "MEMORY" if is_memory else "FILE",
+                "database_file_exists": file_exists,
+                "database_size_bytes": file_size,
+                "journal_mode": journal_mode,
+                "integrity_check": integrity,
+                "record_counts": counts,
+            }
+        except Exception as exc:
+            return {
+                "status": "UNAVAILABLE",
+                "storage_type": "FILE" if self.db_path != ":memory:" else "MEMORY",
+                "database_file_exists": os.path.isfile(self.db_path) if self.db_path != ":memory:" else False,
+                "integrity_check": "ERROR",
+                "error_type": type(exc).__name__,
+            }
 
     def record_multi_exchange_reference(self, epoch_ts: float, contract_ticker: str, strike_price: Optional[float], primary_spot_price: Optional[float], official_brti_price: Optional[float], snapshot: dict) -> int:
         reference_price = snapshot.get("reference_price")
