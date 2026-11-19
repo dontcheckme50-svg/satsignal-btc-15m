@@ -248,6 +248,16 @@ class FinalDecisionEngine:
         raw_up_prob = float(np.clip(norm.cdf(z_terminal + micro_drift_z), 0.02, 0.98))
         shrink = min(0.70, weakness.weakness_score / 130.0)
         up_prob = round(0.5 + (raw_up_prob - 0.5) * (1.0 - shrink), 4)
+
+        # Apply a conservative Platt calibrator fitted only from settled
+        # directional locks. Until the ledger has enough outcomes, the
+        # database supplies the identity transform (slope=1, intercept=0).
+        calibration_slope = float(np.clip(weights.get("calibration_slope", 1.0), 0.25, 2.5))
+        calibration_intercept = float(np.clip(weights.get("calibration_intercept", 0.0), -1.0, 1.0))
+        clipped_prob = float(np.clip(up_prob, 0.02, 0.98))
+        probability_logit = math.log(clipped_prob / (1.0 - clipped_prob))
+        calibrated_logit = calibration_intercept + calibration_slope * probability_logit
+        up_prob = round(float(1.0 / (1.0 + math.exp(-float(np.clip(calibrated_logit, -12.0, 12.0))))), 4)
         down_prob = round(1.0 - up_prob, 4)
         directional_votes = [s for s in (ev.signal, early.signal) if s != Signal.WAIT]
         details: List[str] = []
