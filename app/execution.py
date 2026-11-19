@@ -47,6 +47,19 @@ class ExecutionManager:
         kalshi_age = safe_age_seconds(self.hub.last_kalshi_ts, execution_now)
         if spot_age is None or spot_age > settings.stale_feed_threshold_sec:
             return None
+        book_age = safe_age_seconds(self.hub.last_book_ts, execution_now)
+        book_source_matches = bool(
+            self.hub.active_spot_source
+            and self.hub.last_book_source == self.hub.active_spot_source
+        )
+        if (
+            book_age is None
+            or book_age > settings.stale_feed_threshold_sec
+            or not book_source_matches
+            or not self.hub.bids
+            or not self.hub.asks
+        ):
+            return None
         if kalshi_age is None or kalshi_age > 12.0:
             return None
         active_market = self.hub.kalshi_contract
