@@ -6,7 +6,7 @@ from app.config import settings
 from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, MarketRegime, RegimeReport, Signal, WeaknessReport
 
 class EvidenceEngine:
-    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
+    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None, reference_price: Optional[float] = None, reference_age_sec: Optional[float] = None) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
         recent_trades = [t for t in trades if contract.open_timestamp <= t[0] and now - 60.0 <= t[0] <= now]
@@ -58,6 +58,26 @@ class EvidenceEngine:
             and 0.0 <= float(brti_age) <= settings.stale_feed_threshold_sec
         )
         brti_distance = (float(official_brti_price) - contract.strike_price) if brti_valid else None
+        reference_valid = (
+            reference_price is not None and math.isfinite(float(reference_price))
+            and float(reference_price) > 0 and reference_age_sec is not None
+            and math.isfinite(float(reference_age_sec))
+            and 0.0 <= float(reference_age_sec) <= settings.stale_feed_threshold_sec
+        )
+        reference_spread_bps = (
+            (float(reference_price) - live_price) / live_price * 10000.0
+            if reference_valid and live_price > 0 else None
+        )
+        reference_conflict = bool(
+            reference_valid and (
+                abs(float(reference_spread_bps)) >= 5.0
+                or (
+                    (live_price - contract.strike_price) * (float(reference_price) - contract.strike_price) < 0
+                    and abs((live_price - contract.strike_price) / contract.strike_price * 10000.0) >= 0.5
+                    and abs((float(reference_price) - contract.strike_price) / contract.strike_price * 10000.0) >= 0.5
+                )
+            )
+        )
         brti_z = self._strike_z_score(float(official_brti_price), contract.strike_price, contract.seconds_remaining, ann_vol) if brti_valid else None
         # Spot remains the primary price input; valid official BRTI contributes
         # an independent settlement-benchmark confirmation, never a fallback.
@@ -74,7 +94,7 @@ class EvidenceEngine:
         )
         raw_score = float(np.clip(((buy_pct - 50.0) / 50.0) * 30.0 + (0.65 * obi + 0.35 * large_bias) * 25.0 + (mom_score / 100.0) * 25.0 + float(np.clip(strike_z * 12.0, -20.0, 20.0)), -100.0, 100.0))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
-        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6))
+        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6), reference_price=round(float(reference_price), 2) if reference_valid else None, reference_age_seconds=round(float(reference_age_sec), 3) if reference_valid else None, reference_spread_bps=round(float(reference_spread_bps), 3) if reference_spread_bps is not None else None, reference_conflict=reference_conflict)
 
     @staticmethod
     def _resample_prices_to_seconds(
@@ -146,6 +166,8 @@ class WeaknessEngine:
             feed_bad = True; penalty += 25.0; flags.append(f"Delayed or missing order-book feed ({book_age_sec}s old)")
         if ev.brti_conflict:
             penalty += 20.0; flags.append("Official BRTI and spot are on opposite sides of the Kalshi strike")
+        if ev.reference_conflict:
+            penalty += 30.0; flags.append("Independent USD exchange reference disagrees with primary spot; price/strike alignment is unreliable")
         if ev.buying_pressure_pct >= 62.0 and ev.momentum_score < -10.0:
             absorption = True; penalty += 25.0; flags.append("Sell-wall absorption: heavy taker buying failing to lift price")
         elif ev.selling_pressure_pct >= 62.0 and ev.momentum_score > 10.0:
@@ -241,8 +263,10 @@ class FinalDecisionEngine:
             final_sig, rationale = Signal.WAIT, "WAIT: Verified official Kalshi contract and strike unavailable; proxy contract is non-actionable."
         elif contract.seconds_remaining < settings.final_lockout_seconds:
             final_sig, rationale = Signal.WAIT, "WAIT: Final 65s settlement averaging window active; avoiding late entry."
-        elif agreement == "CONFLICTED" and len(directional_votes) == 2:
-            final_sig, rationale = Signal.WAIT, "WAIT: Independent engines disagree on direction."
+        elif ev.reference_conflict or ev.brti_conflict:
+            final_sig, rationale = Signal.WAIT, "WAIT: Primary spot conflicts with the independent USD reference or official BRTI."
+        elif agreement != "STRONG_CONSENSUS":
+            final_sig, rationale = Signal.WAIT, "WAIT: Evidence and Early engines have not independently confirmed the same direction."
         elif confidence < regime.min_confidence_required:
             final_sig, rationale = Signal.WAIT, f"WAIT: Calibrated probability {confidence}% below {regime.regime.value} hurdle ({regime.min_confidence_required}%)."
         elif up_prob > 0.5:
