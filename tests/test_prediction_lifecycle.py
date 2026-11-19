@@ -1,3 +1,4 @@
+import pytest
 from app.database import PredictionLedger
 from app.feeds import MarketDataHub
 from app.models import ContractInfo, FinalDecisionReport, MarketRegime, PredictionRecord, Signal
