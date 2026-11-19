@@ -88,7 +88,7 @@ class _ConnectionCompat:
         if "RETURNING id" in statement.upper():
             row = cur.fetchone()
             wrapped.lastrowid = row["id"] if row else None
-            wrapped._returning_without_row = row is None
+            wrapped._returning_without_row = row is None or row.get("id") is None
             # Expose the consumed RETURNING row to callers exactly once.
             wrapped._first = row
             wrapped._has_first = row is not None
