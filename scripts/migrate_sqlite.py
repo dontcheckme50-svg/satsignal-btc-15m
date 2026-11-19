@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ def migrate_database(source_path: str, destination_path: str) -> dict[str, Any]:
         )
 
     source_uri = f"{source.as_uri()}?mode=ro"
-    with sqlite3.connect(source_uri, uri=True, timeout=30.0) as source_conn:
+    with closing(sqlite3.connect(source_uri, uri=True, timeout=30.0)) as source_conn:
         source_conn.execute("PRAGMA busy_timeout=30000")
         source_integrity = _integrity_check(source_conn)
         if source_integrity != "ok":
@@ -72,7 +73,7 @@ def migrate_database(source_path: str, destination_path: str) -> dict[str, Any]:
                 "Source database has none of the expected SATSIGNAL ledger tables"
             )
 
-        with sqlite3.connect(str(destination), timeout=30.0) as destination_conn:
+        with closing(sqlite3.connect(str(destination), timeout=30.0)) as destination_conn:
             source_conn.backup(destination_conn, pages=256, sleep=0.1)
             destination_conn.execute("PRAGMA journal_mode=WAL")
             destination_conn.commit()
