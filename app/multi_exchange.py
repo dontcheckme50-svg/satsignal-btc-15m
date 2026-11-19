@@ -254,6 +254,7 @@ class MultiExchangeReference:
         venue.bids = {bid: bid_qty}
         venue.asks = {ask: ask_qty}
         venue.last_book_ts = ts
+        venue.last_ticker_ts = ts
         venue.connected = True
         venue.last_error = None
         return True
