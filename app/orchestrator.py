@@ -165,7 +165,7 @@ class PredictorOrchestrator:
         )
         evidence_bids = list(self.hub.bids) if book_fresh else []
         evidence_asks = list(self.hub.asks) if book_fresh else []
-        multi_reference = self.hub.get_multi_exchange_snapshot()
+        multi_reference = self.hub.get_multi_exchange_snapshot(contract_open_ts=new_contract.open_timestamp)
         multi_reference["strike_price"] = new_contract.strike_price
         reference_price = multi_reference.get("reference_price")
         multi_reference["reference_vs_strike_bps"] = (
