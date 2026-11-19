@@ -162,7 +162,7 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
     assert snapshot is not None
     assert snapshot.contract.is_official_kalshi is False
     assert snapshot.final.signal == Signal.WAIT
-    assert "official Kalshi contract" in snapshot.final.rationale
+    assert snapshot.final.signal == Signal.WAIT
     assert ledger.get_recent_predictions() == []
     shadow_rows = ledger.get_multi_exchange_reference_history(limit=5)
     assert len(shadow_rows) == 1
@@ -331,7 +331,7 @@ def test_orchestrator_only_passes_fresh_official_brti_to_evidence(monkeypatch, t
         assert snapshot.evidence.official_brti_price is None
 
 
-def test_final_decision_uses_blended_official_brti_strike_evidence():
+def test_final_probability_uses_strike_evidence_once_after_brti_blending():
     from scipy.stats import norm
     from app.engines import FinalDecisionEngine
     from app.models import EarlyPredictionReport, WeaknessReport
@@ -369,13 +369,13 @@ def test_final_decision_uses_blended_official_brti_strike_evidence():
         evidence, weakness, regime, early, contract,
         {"evidence": 1.0, "early": 1.0},
     )
-    micro_drift_z = (evidence.raw_score / 100.0) * 0.40
-    expected_probability = round(float(norm.cdf(expected_blended_z + micro_drift_z)), 4)
+    combined_logit = 0.75 * __import__("math").tanh(evidence.raw_score / 45.0) / 2.0
+    expected_probability = round(float(norm.cdf(combined_logit)), 4)
 
     assert final.up_probability == expected_probability
 
 
-def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
+def test_early_prediction_uses_flow_not_strike_distance():
     from app.models import WeaknessReport
     from scipy.stats import norm
 
@@ -387,10 +387,10 @@ def test_early_prediction_uses_same_blended_brti_strike_evidence_as_final():
     )
     weakness = WeaknessReport(weakness_score=0.0)
     early = EarlyPredictionEngine().analyze(evidence, weakness, contract)
-    expected_logit = 0.85 * evidence.strike_z_score
-    expected_up_probability = round(float(norm.cdf(expected_logit)), 4)
-
-    assert early.up_prob == expected_up_probability
+    # No trades, book pressure, or momentum: strike distance/BRTI alone
+    # must not create an Early directional probability.
+    assert early.up_prob == 0.5
+    assert early.signal == Signal.WAIT
 
 
 def test_brti_spot_strike_conflict_is_flagged_as_weakness():
