@@ -43,10 +43,12 @@ jobs:
       - name: Smoke-test container startup and health endpoints
         shell: bash
         run: |
-          docker run -d --name satsignal-ci -p 8000:8000 satsignal-btc-15m:ci
+          docker volume create satsignal-ci-data
+          docker run -d --name satsignal-ci -p 8000:8000 -v satsignal-ci-data:/data satsignal-btc-15m:ci
           cleanup() {
             docker logs satsignal-ci || true
             docker rm -f satsignal-ci || true
+            docker volume rm satsignal-ci-data || true
           }
           trap cleanup EXIT
           python - <<'PY'
@@ -69,8 +71,42 @@ jobs:
           assert health is not None, "container did not become healthy"
           assert health["status"] == "ok"
           assert health["trading_mode"] == "paper"
-          assert health["persistent_storage_required"] is False
+          assert health["persistent_storage_required"] is True
+          assert health["persistent_storage"]["persistent_mount_confirmed"] is True
           storage = get_json("/api/storage/health")
           assert storage["integrity_check"] == "ok"
-          print("Container startup and storage health smoke test passed")
+          print("Container startup and persistent storage mount check passed")
+
+          # Write a marker, replace the container, and verify the same named
+          # volume still contains the record after the restart.
+          import subprocess
+          subprocess.run([
+              "docker", "exec", "satsignal-ci", "python", "-c",
+              "import sqlite3; c=sqlite3.connect('/data/satsignal_btc15m.db'); "
+              "c.execute('CREATE TABLE IF NOT EXISTS restart_probe (value TEXT)'); "
+              "c.execute('INSERT INTO restart_probe VALUES (?)', ('survives',)); "
+              "c.commit(); c.close()"
+          ], check=True)
+          subprocess.run(["docker", "rm", "-f", "satsignal-ci"], check=True)
+          subprocess.run([
+              "docker", "run", "-d", "--name", "satsignal-ci", "-p", "8000:8000",
+              "-v", "satsignal-ci-data:/data", "satsignal-btc-15m:ci"
+          ], check=True)
+
+          restarted = None
+          for _ in range(45):
+              try:
+                  restarted = get_json("/api/health")
+                  break
+              except Exception:
+                  time.sleep(1)
+          assert restarted is not None, "replacement container did not become healthy"
+          assert restarted["persistent_storage"]["persistent_mount_confirmed"] is True
+          subprocess.run([
+              "docker", "exec", "satsignal-ci", "python", "-c",
+              "import sqlite3; c=sqlite3.connect('/data/satsignal_btc15m.db'); "
+              "rows=c.execute('SELECT value FROM restart_probe').fetchall(); "
+              "assert rows == [('survives',)], rows; c.close()"
+          ], check=True)
+          print("SQLite record survived container replacement on persistent volume")
           PY
