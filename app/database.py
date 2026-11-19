@@ -1,4 +1,5 @@
 import os, sqlite3, json, math
+import numpy as np
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
