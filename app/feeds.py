@@ -466,8 +466,12 @@ class MarketDataHub:
                             else:
                                 self.brti_status, self.brti_detail = "INVALID_DATA", "No valid, fresh BRTI value with a source timestamp was returned"
                         elif resp.status in (401, 403):
-                            self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
-                            break
+                            self.brti_status, self.brti_detail = "UNAVAILABLE", "BRTI access unavailable (authentication or entitlement); retrying in 30s"
+                            # Entitlements and credentials can be corrected while the
+                            # service is running. Keep the official feed worker alive
+                            # and periodically re-check; never substitute spot data.
+                            await asyncio.sleep(30.0)
+                            continue
                         else:
                             self.brti_status, self.brti_detail = "UNAVAILABLE", f"Kalshi BRTI HTTP {resp.status}"
                 except asyncio.CancelledError:
