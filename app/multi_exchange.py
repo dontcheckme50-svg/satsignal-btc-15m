@@ -50,7 +50,10 @@ class VenueBook:
         if side not in ("buy", "sell", "unknown"):
             side = "unknown"
         self.trades.append((ts, price, qty, side))
-        self.last_trade_price, self.last_trade_ts = price, ts
+        # Late/out-of-order events may remain in historical flow, but must not
+        # roll the venue's latest-price/freshness marker backwards.
+        if ts >= self.last_trade_ts:
+            self.last_trade_price, self.last_trade_ts = price, ts
         return True
 
     def trade_flow_snapshot(self, now: Optional[float] = None, windows=(15, 60, 180, 900), since_ts: Optional[float] = None) -> dict:
@@ -244,8 +247,9 @@ class MultiExchangeReference:
                         elif "aggTrade" in stream or msg.get("e") == "aggTrade":
                             price, qty = float(msg["p"]), float(msg["q"])
                             if price > 0 and qty > 0:
+                                event_ts = self._event_timestamp(msg.get("T", msg.get("E")), now)
                                 side = self._binance_aggressor_side(msg.get("m"))
-                                self.binance.ingest_trade(now, price, qty, side)
+                                self.binance.ingest_trade(event_ts, price, qty, side)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
