@@ -419,3 +419,84 @@ def test_two_usd_venues_create_reference_while_usdt_binance_remains_excluded():
     assert snapshot["status"] == "LIVE"
     assert set(snapshot["included_venues"]) == {"COINBASE", "KRAKEN"}
     assert "BINANCE" not in snapshot["included_venues"]
+
+
+@pytest.mark.asyncio
+async def test_coinbase_stream_parses_match_and_ticker_frames(monkeypatch):
+    reference = MultiExchangeReference()
+    reference._running = True
+    now = time.time()
+    frames = [
+        {"type": "match", "product_id": "BTC-USD", "price": "90000", "size": "0.4", "side": "buy"},
+        {"type": "ticker", "product_id": "BTC-USD", "best_bid": "89999", "best_ask": "90001",
+         "best_bid_size": "2", "best_ask_size": "3"},
+    ]
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def messages():
+                for frame in frames:
+                    yield multi_exchange_module.json.dumps(frame)
+                reference._running = False
+            return messages()
+
+    monkeypatch.setattr(
+        multi_exchange_module.websockets, "connect",
+        lambda *args, **kwargs: FakeWebSocket(),
+    )
+
+    await reference._coinbase_loop()
+
+    assert len(reference.coinbase.trades) == 1
+    assert reference.coinbase.trades[0][3] == "sell"  # Coinbase side is maker-side.
+    assert reference.coinbase.last_ticker_ts > 0
+    assert reference.coinbase.snapshot()["status"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_kraken_v2_stream_parses_book_trade_and_ticker_frames(monkeypatch):
+    reference = MultiExchangeReference()
+    reference._running = True
+    frames = [
+        {"channel": "book", "type": "snapshot", "data": [{
+            "bids": [{"price": "89999", "qty": "2"}],
+            "asks": [{"price": "90001", "qty": "3"}],
+        }]},
+        {"channel": "trade", "data": [{"price": "90000", "qty": "0.25", "side": "buy"}]},
+        {"channel": "ticker", "data": [{
+            "bid": "89999", "ask": "90001", "bid_qty": "2", "ask_qty": "3",
+        }]},
+    ]
+
+    class FakeWebSocket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def send(self, _message):
+            return None
+        def __aiter__(self):
+            async def messages():
+                for frame in frames:
+                    yield multi_exchange_module.json.dumps(frame)
+                reference._running = False
+            return messages()
+
+    monkeypatch.setattr(
+        multi_exchange_module.websockets, "connect",
+        lambda *args, **kwargs: FakeWebSocket(),
+    )
+
+    await reference._kraken_loop()
+
+    assert len(reference.kraken.trades) == 1
+    assert reference.kraken.trades[0][3] == "buy"
+    assert reference.kraken.last_book_ts > 0
+    assert reference.kraken.last_ticker_ts > 0
+    assert reference.kraken.snapshot()["status"] == "LIVE"
