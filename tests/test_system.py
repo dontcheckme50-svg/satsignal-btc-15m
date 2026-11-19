@@ -1879,7 +1879,7 @@ def test_legacy_database_migration_preserves_existing_prediction_and_trade(tmp_p
             final_signal, confidence, up_prob, down_prob, regime
         ) VALUES (
             'KXBTC15M-LEGACY-ROW', '2026-11-17 00:00:00 UTC', 1794873600.0,
-            90000.0, 90010.0, 500.0, 'UP', 'DOWN', 'UP', 70.0, 0.7, 0.3, 'STABLE'
+            90000.0, 90010.0, 500.0, 'UP', 'DOWN', 'UP', 70.0, 0.7, 0.3, 'STABLE MARKET'
         );
         INSERT INTO trades (
             mode, contract_ticker, timestamp_iso, side, contracts, entry_price,
