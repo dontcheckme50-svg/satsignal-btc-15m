@@ -79,7 +79,7 @@ async def get_health():
 
 @app.get("/api/storage/health")
 async def get_storage_health():
-    storage = ledger.get_storage_health()
+    storage = await asyncio.to_thread(ledger.get_storage_health)
     return {
         **storage,
         "persistent_storage": storage_mount_status,
