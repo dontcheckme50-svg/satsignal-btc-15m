@@ -39,6 +39,14 @@ def test_postgres_ledger_lock_settlement_and_scoreboard():
     assert ledger.record_prediction(prediction) == first_id
     assert ledger.has_official_prediction_lock(ticker)
 
+    ledger.record_prediction_observation(
+        ticker, epoch_ts=1795176001.0, seconds_remaining=299.0,
+        payload={"signal": "UP", "source": "postgres-integration"},
+    )
+    observations = ledger.get_recent_prediction_observations(10, ticker)
+    assert len(observations) == 1
+    assert observations[0]["payload"]["signal"] == "UP"
+
     ledger.record_trade(TradeRecord(
         mode="paper",
         contract_ticker=ticker,
@@ -53,6 +61,10 @@ def test_postgres_ledger_lock_settlement_and_scoreboard():
         status="OPEN",
         notes="PostgreSQL integration test",
     ))
+    assert ticker in ledger.get_unsettled_contract_tickers()
+    assert ledger.count_trades_for_ticker(ticker) == 1
+    assert ledger.count_open_contracts_for_ticker(ticker) == 1
+
     assert ledger.settle_contract(
         ticker, settlement_price=90020.0,
         official_result="UP", settlement_source="KALSHI_VERIFIED",
@@ -68,4 +80,6 @@ def test_postgres_ledger_lock_settlement_and_scoreboard():
     assert scoreboard.final_wins >= 1
     assert any(item.contract_ticker == ticker for item in ledger.get_recent_predictions(100))
     assert any(item.contract_ticker == ticker for item in ledger.get_recent_trades(100))
+    assert ticker not in ledger.get_unsettled_contract_tickers()
+    assert ledger.count_open_contracts_for_ticker(ticker) == 0
     assert ledger.get_storage_health()["storage_type"] == "POSTGRESQL"
