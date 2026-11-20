@@ -14,17 +14,34 @@ hub = MarketDataHub()
 ledger = PredictionLedger(settings.db_path)
 orchestrator = PredictorOrchestrator(hub, ledger)
 active_clients: Set[WebSocket] = set()
+pending_ws_payloads: dict[WebSocket, str] = {}
+ws_send_tasks: dict[WebSocket, asyncio.Task] = {}
 START_TIME = time.time()
 
 def broadcast_snapshot(snap: DashboardSnapshot) -> None:
-    if not active_clients: return
+    if not active_clients:
+        return
     payload = snap.model_dump_json()
     for ws in list(active_clients):
-        asyncio.create_task(_safe_send(ws, payload))
+        pending_ws_payloads[ws] = payload
+        task = ws_send_tasks.get(ws)
+        if task is None or task.done():
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
-async def _safe_send(ws: WebSocket, payload: str) -> None:
-    try: await ws.send_text(payload)
-    except Exception: active_clients.discard(ws)
+async def _drain_ws(ws: WebSocket) -> None:
+    try:
+        while ws in active_clients:
+            payload = pending_ws_payloads.pop(ws, None)
+            if payload is None:
+                break
+            await ws.send_text(payload)
+    except Exception:
+        active_clients.discard(ws)
+        pending_ws_payloads.pop(ws, None)
+    finally:
+        ws_send_tasks.pop(ws, None)
+        if ws in active_clients and ws in pending_ws_payloads:
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,7 +62,7 @@ async def get_health():
     # Keep the process liveness response HTTP 200 so a transient storage
     # diagnostic does not trigger an unnecessary host restart. Storage health
     # is reported independently and in detail for operators.
-    storage = ledger.get_storage_health()
+    storage = await asyncio.to_thread(ledger.get_storage_health)
     return {
         "status": "ok",
         "uptime_seconds": round(time.time() - START_TIME, 1),
@@ -76,7 +93,8 @@ async def get_orchestrator_health():
 @app.get("/api/state")
 async def get_state():
     if orchestrator.latest_snapshot is None:
-        return {"status": "warming_up", "server_time_iso": iso_now(), "feeds": [f.model_dump() for f in hub.get_feed_statuses()], "scoreboard": ledger.get_scoreboard().model_dump()}
+        scoreboard = await asyncio.to_thread(ledger.get_scoreboard)
+        return {"status": "warming_up", "server_time_iso": iso_now(), "feeds": [f.model_dump() for f in hub.get_feed_statuses()], "scoreboard": scoreboard.model_dump()}
     return orchestrator.latest_snapshot.model_dump()
 
 @app.get("/api/prediction")
@@ -115,38 +133,49 @@ async def get_multi_exchange():
 
 @app.get("/api/multi-exchange/history")
 async def get_multi_exchange_history(limit: int = Query(default=200, ge=1, le=1000)):
-    return {"observations": ledger.get_multi_exchange_reference_history(limit=limit)}
+    observations = await asyncio.to_thread(ledger.get_multi_exchange_reference_history, limit)
+    return {"observations": observations}
 
 @app.get("/api/history")
 async def get_history(limit: int = Query(default=50, ge=1, le=500)):
-    return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
+    predictions = await asyncio.to_thread(ledger.get_recent_predictions, limit)
+    return {"predictions": [p.model_dump() for p in predictions]}
 
 @app.get("/api/prediction-observations")
 async def get_prediction_observations(limit: int = Query(default=100, ge=1, le=1000), contract_ticker: Optional[str] = None):
-    return {"observations": ledger.get_recent_prediction_observations(limit=limit, contract_ticker=contract_ticker)}
+    observations = await asyncio.to_thread(ledger.get_recent_prediction_observations, limit, contract_ticker)
+    return {"observations": observations}
 
 @app.get("/api/scoreboard")
 async def get_scoreboard():
-    return ledger.get_scoreboard().model_dump()
+    scoreboard = await asyncio.to_thread(ledger.get_scoreboard)
+    return scoreboard.model_dump()
 
 @app.get("/api/brti-cohorts")
 async def get_brti_cohorts():
-    return ledger.get_brti_cohort_report()
+    report = await asyncio.to_thread(ledger.get_brti_cohort_report)
+    return report
 
 @app.get("/api/trades")
 async def get_trades(limit: int = Query(default=30, ge=1, le=200)):
-    return {"trades": [t.model_dump() for t in ledger.get_recent_trades(limit=limit)]}
+    trades = await asyncio.to_thread(ledger.get_recent_trades, limit)
+    return {"trades": [t.model_dump() for t in trades]}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_clients.add(websocket)
-    if orchestrator.latest_snapshot is not None:
-        await websocket.send_text(orchestrator.latest_snapshot.model_dump_json())
     try:
-        while True: await websocket.receive_text()
+        if orchestrator.latest_snapshot is not None:
+            await websocket.send_text(orchestrator.latest_snapshot.model_dump_json())
+        while True:
+            await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         active_clients.discard(websocket)
+        pending_ws_payloads.pop(websocket, None)
+        ws_send_tasks.pop(websocket, None)
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -448,7 +477,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); fetchStorageHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500); setInterval(fetchStorageHealth, 5000);
+  function scheduleNoOverlap(fn, intervalMs) {
+    let running = false;
+    const run = async () => {
+      if (running) return;
+      running = true;
+      try { await fn(); } finally { running = false; }
+    };
+    run();
+    setInterval(run, intervalMs);
+  }
+  fetchInitial();
+  connectWS();
+  setInterval(tickTimers, 250);
+  scheduleNoOverlap(fetchFeeds, 10000);
+  scheduleNoOverlap(fetchMultiExchange, 10000);
+  scheduleNoOverlap(fetchOrchestratorHealth, 10000);
+  scheduleNoOverlap(fetchStorageHealth, 30000);
 </script>
 </body>
 </html>"""
