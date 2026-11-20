@@ -183,6 +183,16 @@ class PredictionLedger:
                 counts = {}
                 for table in ("predictions", "prediction_observations", "trades", "multi_exchange_reference"):
                     counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            if self.database_url:
+                return {
+                    "status": "HEALTHY",
+                    "storage_type": "POSTGRESQL",
+                    "database_file_exists": None,
+                    "database_size_bytes": None,
+                    "journal_mode": None,
+                    "integrity_check": integrity,
+                    "record_counts": counts,
+                }
             is_memory = self.db_path == ":memory:" or "mode=memory" in self.db_path
             file_exists = False if is_memory else os.path.isfile(self.db_path)
             file_size = os.path.getsize(self.db_path) if file_exists else 0
@@ -424,8 +434,7 @@ class PredictionLedger:
         # can legitimately open before the two-vote forecast lock exists.
         # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
-            rows = conn.execute(
-                """WITH pending AS (
+            pending_sql = """WITH pending AS (
                        SELECT contract_ticker, MIN(epoch_ts) AS first_seen
                        FROM predictions
                        WHERE settled = 0 AND is_official_lock = 1
@@ -445,7 +454,12 @@ class PredictionLedger:
                    FROM pending
                    GROUP BY contract_ticker
                    ORDER BY first_seen ASC"""
-            ).fetchall()
+            if self.database_url:
+                pending_sql = pending_sql.replace(
+                    "CAST(strftime('%s', substr(MIN(timestamp_iso), 1, 19)) AS REAL)",
+                    "COALESCE(EXTRACT(EPOCH FROM MIN(to_timestamp(timestamp_iso, 'YYYY-MM-DD HH24:MI:SS UTC'))), 0.0)"
+                )
+            rows = conn.execute(pending_sql).fetchall()
             return [r["contract_ticker"] for r in rows]
 
     def count_trades_for_ticker(self, contract_ticker: str) -> int:
