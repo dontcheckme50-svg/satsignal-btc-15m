@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - reliability-isolation-v1
+      - supabase-storage-repair
   pull_request:
     branches:
       - main
