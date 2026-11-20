@@ -45,7 +45,7 @@ class ConnectionAdapter:
         if upper.startswith("PRAGMA JOURNAL_MODE"):
             return CursorAdapter(self._connection.execute("SELECT 'POSTGRESQL' AS journal_mode"))
         if upper.startswith("PRAGMA QUICK_CHECK"):
-            return CursorAdapter(self._connection.execute("SELECT 'ok' AS integrity"))
+            return CursorAdapter(self._connection.execute("SELECT 'not_applicable' AS integrity"))
         if upper.startswith("BEGIN IMMEDIATE"):
             raw = "SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))"
         raw = raw.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
