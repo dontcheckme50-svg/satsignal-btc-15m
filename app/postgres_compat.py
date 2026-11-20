@@ -5,6 +5,13 @@ import psycopg
 from psycopg.rows import dict_row
 
 
+class RowAdapter(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
 class CursorAdapter:
     def __init__(self, cursor, lastrowid=None):
         self._cursor = cursor
@@ -12,10 +19,11 @@ class CursorAdapter:
         self.rowcount = cursor.rowcount
 
     def fetchone(self):
-        return self._cursor.fetchone()
+        row = self._cursor.fetchone()
+        return RowAdapter(row) if row is not None else None
 
     def fetchall(self):
-        return self._cursor.fetchall()
+        return [RowAdapter(row) for row in self._cursor.fetchall()]
 
 
 class ConnectionAdapter:
