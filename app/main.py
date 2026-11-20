@@ -419,7 +419,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const h = await res.json();
       const counts = h.record_counts || {};
       const persistent = h.persistent_storage || {};
-      const healthy = h.status === "HEALTHY" && h.integrity_check === "ok";
+      const healthy = h.status === "HEALTHY" && (h.storage_type === "POSTGRESQL" ? h.connection_check === "ok" : h.integrity_check === "ok");
       statusEl.textContent = h.status || "UNKNOWN";
       statusEl.style.color = healthy ? "var(--up)" : "var(--down)";
       set("storage-backend", h.storage_type === "POSTGRESQL" ? "SUPABASE / POSTGRESQL" : (h.storage_type === "FILE" ? "SQLITE (FILE)" : (h.storage_type || "UNKNOWN")));
