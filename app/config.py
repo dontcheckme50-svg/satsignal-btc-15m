@@ -45,7 +45,8 @@ persistent_storage_required = os.getenv(
 storage_mount_status = (
     {
         "status": "MANAGED_DATABASE_CONFIGURED",
-        "persistent_mount_confirmed": True,
+        "persistent_mount_confirmed": None,
+        "managed_database_configured": True,
         "storage_type": "POSTGRESQL",
         "database_url_configured": True,
         "mount_path": None,
