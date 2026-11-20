@@ -1923,10 +1923,13 @@ def test_legacy_database_migration_preserves_existing_prediction_and_trade(tmp_p
     } <= reference_columns
 
 
-def test_database_open_failure_is_not_silently_replaced_with_memory_db(tmp_path):
+def test_database_creates_missing_parent_without_falling_back_to_memory(tmp_path):
     missing_parent_db = tmp_path / "missing-volume" / "satsignal.db"
-    with pytest.raises(sqlite3.OperationalError):
-        PredictionLedger(str(missing_parent_db))
+    ledger = PredictionLedger(str(missing_parent_db))
+
+    assert missing_parent_db.is_file()
+    assert ledger.get_storage_health()["storage_type"] == "FILE"
+    assert ledger.get_storage_health()["status"] == "HEALTHY"
 
 
 def test_storage_health_reports_file_integrity_and_saved_record_counts(tmp_path):
