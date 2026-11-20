@@ -9,24 +9,26 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self.database_url = getattr(settings, "database_url", None)
         self._engine_weights_cache = None
         self._engine_weights_cache_ts = 0.0
         # SQLite cannot create missing parent directories. Host deployments may
         # provide a nested PREDICTOR_DB_PATH (for example /data/state/ledger.db),
         # so create that directory before the first connection attempt. Do not
         # touch SQLite URI paths or in-memory databases.
-        if self.db_path != ":memory:" and not self.db_path.startswith("file:"):
+        if not self.database_url and self.db_path != ":memory:" and not self.db_path.startswith("file:"):
             parent = os.path.dirname(os.path.abspath(self.db_path))
             if parent:
                 os.makedirs(parent, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        # Each operation owns its connection. A bounded busy timeout absorbs
-        # brief overlap between the prediction, settlement, and API workers.
-        conn = sqlite3.connect(
-            self.db_path, timeout=15.0, check_same_thread=False
-        )
+    def _connect(self):
+        # A configured managed database is authoritative; never silently fall
+        # back to ephemeral SQLite when PostgreSQL is unavailable.
+        if self.database_url:
+            from app.postgres_compat import connect
+            return connect(self.database_url)
+        conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
@@ -37,9 +39,11 @@ class PredictionLedger:
         conn = self._connect()
         try:
             if immediate:
-                # Settlement reads and writes must share one reserved write
-                # transaction so two reconcilers cannot grade the same trade.
-                conn.execute("BEGIN IMMEDIATE")
+                # Serialize settlement reconciliations per database backend.
+                if self.database_url:
+                    conn.execute("SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))")
+                else:
+                    conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -52,7 +56,8 @@ class PredictionLedger:
         with self._connection() as conn:
             # WAL is persistent database state; configure it during initialization,
             # not on every short-lived read connection.
-            conn.execute("PRAGMA journal_mode=WAL;")
+            if not self.database_url:
+                conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS predictions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
