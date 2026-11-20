@@ -422,7 +422,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const healthy = h.status === "HEALTHY" && h.integrity_check === "ok";
       statusEl.textContent = h.status || "UNKNOWN";
       statusEl.style.color = healthy ? "var(--up)" : "var(--down)";
-      set("storage-backend", h.storage_type === "FILE" ? "SQLITE (FILE)" : (h.storage_type || "UNKNOWN"));
+      set("storage-backend", h.storage_type === "POSTGRESQL" ? "SUPABASE / POSTGRESQL" : (h.storage_type === "FILE" ? "SQLITE (FILE)" : (h.storage_type || "UNKNOWN")));
       set("storage-file", h.database_file_exists ? "PRESENT" : "NOT VERIFIED");
       set("storage-journal", h.journal_mode || "--");
       set("storage-integrity", h.integrity_check || "--");
