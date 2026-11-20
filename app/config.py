@@ -42,9 +42,20 @@ storage_mount_path = os.getenv("PREDICTOR_STORAGE_MOUNT", "/data")
 persistent_storage_required = os.getenv(
     "PREDICTOR_REQUIRE_PERSISTENT_STORAGE", "0"
 ).strip().lower() in {"1", "true", "yes", "on"}
-storage_mount_status = enforce_persistent_storage(
-    settings.db_path,
-    storage_mount_path,
-    required=persistent_storage_required,
+storage_mount_status = (
+    {
+        "status": "MANAGED_DATABASE_CONFIGURED",
+        "persistent_mount_confirmed": True,
+        "storage_type": "POSTGRESQL",
+        "database_url_configured": True,
+        "mount_path": None,
+        "database_path": None,
+    }
+    if settings.database_url
+    else enforce_persistent_storage(
+        settings.db_path,
+        storage_mount_path,
+        required=persistent_storage_required,
+    )
 )
 
