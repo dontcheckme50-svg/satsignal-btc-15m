@@ -18,60 +18,7 @@ pending_ws_payloads: dict[WebSocket, str] = {}
 ws_send_tasks: dict[WebSocket, asyncio.Task] = {}
 START_TIME = time.time()
 
-def broadcast_snapshot(snap: DashboardSnapshot) -> None:
-    if not active_clients:
-        return
-    payload = snap.model_dump_json()
-    for ws in list(active_clients):
-        pending_ws_payloads[ws] = payload
-        task = ws_send_tasks.get(ws)
-        if task is None or task.done():
-            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
-async def _drain_ws(ws: WebSocket) -> None:
-    try:
-        while ws in active_clients:
-            payload = pending_ws_payloads.pop(ws, None)
-            if payload is None:
-                break
-            await ws.send_text(payload)
-    except Exception:
-        active_clients.discard(ws)
-        pending_ws_payloads.pop(ws, None)
-    finally:
-        ws_send_tasks.pop(ws, None)
-        if ws in active_clients and ws in pending_ws_payloads:
-            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
-
-async def _register_websocket(ws: WebSocket) -> None:
-    # Complete the initial send before registering for broadcasts. This keeps
-    # the initial frame from racing the per-client sender task.
-    initial = orchestrator.latest_snapshot
-    initial_payload = initial.model_dump_json() if initial is not None else None
-    if initial_payload is not None:
-        await ws.send_text(initial_payload)
-
-    active_clients.add(ws)
-    latest = orchestrator.latest_snapshot
-    if latest is not None:
-        latest_payload = latest.model_dump_json()
-        if latest_payload != initial_payload:
-            pending_ws_payloads[ws] = latest_payload
-            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    orchestrator.register_listener(broadcast_snapshot)
-    await hub.start()
-    orch_task = asyncio.create_task(orchestrator.run())
-    yield
-    orchestrator.stop()
-    orch_task.cancel()
-    await asyncio.gather(orch_task, return_exceptions=True)
-    await orchestrator.shutdown_background_tasks()
-    await hub.stop()
-
-app = FastAPI(title="SATSIGNAL BTC 15M API", version="2.0.0", lifespan=lifespan)
 
 def broadcast_snapshot(snap: DashboardSnapshot) -> None:
     if not active_clients:
