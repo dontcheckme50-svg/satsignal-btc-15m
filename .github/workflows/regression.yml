@@ -6,6 +6,7 @@ on:
       - main
       - reliability-isolation-v1
       - supabase-storage-repair
+      - hostless-runtime-reliability-prod-v1
   pull_request:
     branches:
       - main
