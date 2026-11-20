@@ -11,6 +11,14 @@ class PredictionLedger:
         self.db_path = db_path
         self._engine_weights_cache = None
         self._engine_weights_cache_ts = 0.0
+        # SQLite cannot create missing parent directories. Host deployments may
+        # provide a nested PREDICTOR_DB_PATH (for example /data/state/ledger.db),
+        # so create that directory before the first connection attempt. Do not
+        # touch SQLite URI paths or in-memory databases.
+        if self.db_path != ":memory:" and not self.db_path.startswith("file:"):
+            parent = os.path.dirname(os.path.abspath(self.db_path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
