@@ -174,7 +174,7 @@ class PredictionLedger:
 
 
     def get_storage_health(self) -> dict:
-        """Report whether the configured SQLite store is file-backed and readable."""
+        """Report connectivity, integrity, and record counts for the selected backend."""
         try:
             with self._connection() as conn:
                 journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
@@ -209,8 +209,11 @@ class PredictionLedger:
         except Exception as exc:
             return {
                 "status": "UNAVAILABLE",
-                "storage_type": "FILE" if self.db_path != ":memory:" else "MEMORY",
-                "database_file_exists": os.path.isfile(self.db_path) if self.db_path != ":memory:" else False,
+                "storage_type": "POSTGRESQL" if self.database_url else ("FILE" if self.db_path != ":memory:" else "MEMORY"),
+                "database_file_exists": (
+                    None if self.database_url
+                    else (os.path.isfile(self.db_path) if self.db_path != ":memory:" else False)
+                ),
                 "integrity_check": "ERROR",
                 "error_type": type(exc).__name__,
             }
