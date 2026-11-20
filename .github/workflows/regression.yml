@@ -38,7 +38,7 @@ jobs:
       - name: Run PostgreSQL integration regression
         env:
           PYTHONPATH: ${{ github.workspace }}
-          DATABASE_URL: postgresql://satsignal:satsignal-test@localhost:5432/satsignal_test
+          DATABASE_URL: postgresql://satsignal:satsignal-test@localhost:5432/satsignal_test?sslmode=disable
         run: pytest -q tests/test_postgres_storage.py
 
   regression:
