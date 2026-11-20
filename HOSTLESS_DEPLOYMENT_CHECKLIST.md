@@ -41,3 +41,44 @@ The automated regression suite also starts separate Python processes against one
 - WAIT signals are excluded from directional win-rate denominators and shown separately.
 - Paper-trade P&L is separate from prediction accuracy.
 - CF Benchmarks BRTI remains unavailable unless the required entitlement is configured; it is not silently replaced by Binance spot.
+
+## Managed PostgreSQL / Supabase storage
+
+The application supports managed PostgreSQL when `DATABASE_URL` is configured.
+When this variable is present, PostgreSQL is authoritative: connection errors
+fail startup rather than silently switching to local SQLite. Without it, the
+existing SQLite backend remains in use.
+
+Before switching Hostless:
+1. Confirm which Supabase project is the intended SATSIGNAL production database.
+2. Confirm the project is healthy and note its database password privately.
+3. In Hostless, add `DATABASE_URL` as a secret environment variable using the
+   Supabase PostgreSQL connection string with TLS enabled (`sslmode=require`).
+   Never commit this value or paste it into chat/logs.
+4. Deploy and verify `/api/health` reports `storage_type: POSTGRESQL` and
+   `storage_status: HEALTHY`. The dashboard storage panel should also show
+   PostgreSQL. Do not interpret this as proof that prior SQLite history was
+   copied.
+
+### Optional SQLite history transfer
+
+If a SQLite database file containing records needs to be preserved, export or
+download that file from its current host first. Do not assume the container
+filesystem is durable or that the file is present.
+
+Run a dry-run first from an environment where both the SQLite file and the
+Supabase connection are available:
+
+```bash
+DATABASE_URL='(set privately in your shell)' python -m scripts.migrate_sqlite_to_postgres /path/to/satsignal_btc15m.db --dry-run
+```
+
+Review source row counts and schema validation. Then run the same command
+without `--dry-run` to perform the transactional import. The importer preserves
+IDs, rejects conflicting destination rows instead of overwriting them, and can
+be run again safely for rows already copied. Verify all four table counts and
+the SATSIGNAL scoreboard after import.
+
+Do not point the app at a new Supabase project until its identity and intended
+use are confirmed. The integration tests use an isolated disposable PostgreSQL
+service in CI; they do not validate or modify a user's Supabase project.
