@@ -16,6 +16,7 @@ class Settings:
     max_daily_loss_usd: float = float(os.getenv("MAX_DAILY_LOSS_USD", "100.0"))
     min_net_edge_cents: float = float(os.getenv("MIN_NET_EDGE_CENTS", "0.03"))
     db_path: str = os.getenv("PREDICTOR_DB_PATH", "satsignal_btc15m.db")
+    database_url: str | None = os.getenv("DATABASE_URL") or None
     kalshi_public_base_url: str = os.getenv("KALSHI_PUBLIC_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
     kalshi_demo_base_url: str = os.getenv("KALSHI_DEMO_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     kalshi_prod_base_url: str = os.getenv("KALSHI_PROD_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
