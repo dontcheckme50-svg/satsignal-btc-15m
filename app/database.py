@@ -190,7 +190,8 @@ class PredictionLedger:
                     "database_file_exists": None,
                     "database_size_bytes": None,
                     "journal_mode": None,
-                    "integrity_check": integrity,
+                    "integrity_check": "not_applicable",
+                    "connection_check": "ok",
                     "record_counts": counts,
                 }
             is_memory = self.db_path == ":memory:" or "mode=memory" in self.db_path
