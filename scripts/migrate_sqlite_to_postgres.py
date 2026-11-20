@@ -55,7 +55,7 @@ def migrate(source_path: str, database_url: str, dry_run: bool = False) -> dict:
                         (table,),
                     ).fetchall()
                     destination_names = [row[0] for row in destination_columns]
-                    if source_columns != destination_names:
+                    if set(source_columns) != set(destination_names):
                         raise RuntimeError(
                             f"Schema mismatch for {table}: SQLite={source_columns}, "
                             f"PostgreSQL={destination_names}"
