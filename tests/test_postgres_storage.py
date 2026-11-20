@@ -82,4 +82,8 @@ def test_postgres_ledger_lock_settlement_and_scoreboard():
     assert any(item.contract_ticker == ticker for item in ledger.get_recent_trades(100))
     assert ticker not in ledger.get_unsettled_contract_tickers()
     assert ledger.count_open_contracts_for_ticker(ticker) == 0
-    assert ledger.get_storage_health()["storage_type"] == "POSTGRESQL"
+    storage_health = ledger.get_storage_health()
+    assert storage_health["storage_type"] == "POSTGRESQL"
+    assert storage_health["status"] == "HEALTHY"
+    assert storage_health["connection_check"] == "ok"
+    assert storage_health["integrity_check"] == "not_applicable"
