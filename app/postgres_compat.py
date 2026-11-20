@@ -49,7 +49,10 @@ class ConnectionAdapter:
         if upper.startswith("BEGIN IMMEDIATE"):
             raw = "SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))"
         raw = raw.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
-        raw = re.sub(r"(?<!%)\?", "%s", raw)
+        # psycopg treats literal percent signs (including SQL LIKE wildcards)
+        # as placeholder syntax. Escape them before translating ? parameters.
+        raw = raw.replace("%", "%%")
+        raw = raw.replace("?", "%s")
         if raw.upper().startswith("INSERT OR IGNORE INTO"):
             raw = re.sub(r"^INSERT OR IGNORE INTO", "INSERT INTO", raw, flags=re.I)
             raw += " ON CONFLICT DO NOTHING"
