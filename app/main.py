@@ -175,7 +175,10 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         active_clients.discard(websocket)
         pending_ws_payloads.pop(websocket, None)
-        ws_send_tasks.pop(websocket, None)
+        sender_task = ws_send_tasks.pop(websocket, None)
+        if sender_task is not None and not sender_task.done():
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
