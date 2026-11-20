@@ -45,6 +45,22 @@ async def _drain_ws(ws: WebSocket) -> None:
         if ws in active_clients and ws in pending_ws_payloads:
             ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
+async def _register_websocket(ws: WebSocket) -> None:
+    # Complete the initial send before registering for broadcasts. This keeps
+    # the initial frame from racing the per-client sender task.
+    initial = orchestrator.latest_snapshot
+    initial_payload = initial.model_dump_json() if initial is not None else None
+    if initial_payload is not None:
+        await ws.send_text(initial_payload)
+
+    active_clients.add(ws)
+    latest = orchestrator.latest_snapshot
+    if latest is not None:
+        latest_payload = latest.model_dump_json()
+        if latest_payload != initial_payload:
+            pending_ws_payloads[ws] = latest_payload
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     orchestrator.register_listener(broadcast_snapshot)
