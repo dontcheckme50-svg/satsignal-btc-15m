@@ -30,6 +30,12 @@ def migrate(source_path: str, database_url: str, dry_run: bool = False) -> dict:
     if not os.path.isfile(source_path):
         raise FileNotFoundError(f"SQLite source file not found: {source_path}")
 
+    # Managed PostgreSQL providers such as Supabase require TLS by default.
+    # Keep explicit sslmode values intact for local/test environments.
+    if "sslmode=" not in database_url:
+        separator = "&" if "?" in database_url else "?"
+        database_url += separator + "sslmode=require"
+
     # Ensure the destination tables and indexes exist using the application's
     # canonical schema initializer, not a second hand-maintained schema.
     from app.database import PredictionLedger
