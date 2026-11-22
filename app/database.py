@@ -1,4 +1,4 @@
-import os, sqlite3, json, math, time
+import os, sqlite3, json, math, time, threading
 import numpy as np
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -12,6 +12,18 @@ class PredictionLedger:
         self.database_url = getattr(settings, "database_url", None)
         self._engine_weights_cache = None
         self._engine_weights_cache_ts = 0.0
+        # SQLite :memory: databases exist only for the lifetime of one connection.
+        # Keep one connection and serialize its use so every ledger method sees the
+        # same schema/state and transaction boundaries remain safe across threads.
+        self._memory_connection = None
+        self._memory_lock = threading.RLock()
+        if not self.database_url and self._is_memory_path():
+            self._memory_connection = sqlite3.connect(
+                self.db_path, timeout=15.0, check_same_thread=False, uri=self.db_path.startswith("file:")
+            )
+            self._memory_connection.row_factory = sqlite3.Row
+            self._memory_connection.execute("PRAGMA busy_timeout=15000;")
+            self._memory_connection.execute("PRAGMA synchronous=NORMAL;")
         # SQLite cannot create missing parent directories. Host deployments may
         # provide a nested PREDICTOR_DB_PATH (for example /data/state/ledger.db),
         # so create that directory before the first connection attempt. Do not
@@ -28,20 +40,32 @@ class PredictionLedger:
         if self.database_url:
             from app.postgres_compat import connect
             return connect(self.database_url)
-        conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False)
+        if self._memory_connection is not None:
+            return self._memory_connection
+        conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False, uri=self.db_path.startswith("file:"))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
+    def _is_memory_path(self) -> bool:
+        return self.db_path == ":memory:" or ("mode=memory" in self.db_path and self.db_path.startswith("file:"))
+
     @contextmanager
     def _connection(self, immediate: bool = False):
+        # A single in-memory connection is shared by all callers. Hold its
+        # reentrant lock for the full transaction, including nested ledger reads.
+        lock = self._memory_lock if self._memory_connection is not None else None
+        if lock is not None:
+            lock.acquire()
         conn = self._connect()
         try:
             if immediate:
                 # Serialize settlement reconciliations per database backend.
                 if self.database_url:
                     conn.execute("SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))")
+                elif self._memory_connection is None:
+                    conn.execute("BEGIN IMMEDIATE")
                 else:
                     conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -50,7 +74,10 @@ class PredictionLedger:
             conn.rollback()
             raise
         finally:
-            conn.close()
+            if self._memory_connection is not conn:
+                conn.close()
+            if lock is not None:
+                lock.release()
 
     def _init_db(self) -> None:
         with self._connection() as conn:
@@ -194,10 +221,11 @@ class PredictionLedger:
                     "connection_check": "ok",
                     "record_counts": counts,
                 }
-            is_memory = self.db_path == ":memory:" or "mode=memory" in self.db_path
+            is_memory = self._is_memory_path()
             file_exists = False if is_memory else os.path.isfile(self.db_path)
             file_size = os.path.getsize(self.db_path) if file_exists else 0
-            healthy = integrity == "ok" and journal_mode == "WAL" and (is_memory or file_exists)
+            expected_journal_modes = {"MEMORY"} if is_memory else {"WAL"}
+            healthy = integrity == "ok" and journal_mode in expected_journal_modes and (is_memory or file_exists)
             return {
                 "status": "HEALTHY" if healthy else "DEGRADED",
                 "storage_type": "MEMORY" if is_memory else "FILE",
