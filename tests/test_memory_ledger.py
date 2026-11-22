@@ -1,11 +1,13 @@
 import threading
+from dataclasses import replace
 
 from app.config import settings
+import app.database as database
 from app.database import PredictionLedger
 
 
 def test_memory_ledger_keeps_schema_and_records_across_operations(monkeypatch):
-    monkeypatch.setattr(settings, "database_url", None)
+    monkeypatch.setattr(database, "settings", replace(settings, database_url=None))
     ledger = PredictionLedger(":memory:")
 
     row_id = ledger.record_prediction_observation(
@@ -24,7 +26,7 @@ def test_memory_ledger_keeps_schema_and_records_across_operations(monkeypatch):
 
 
 def test_memory_ledger_serializes_concurrent_observation_writes(monkeypatch):
-    monkeypatch.setattr(settings, "database_url", None)
+    monkeypatch.setattr(database, "settings", replace(settings, database_url=None))
     ledger = PredictionLedger(":memory:")
     failures = []
 
