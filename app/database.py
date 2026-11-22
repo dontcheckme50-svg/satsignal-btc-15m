@@ -7,6 +7,13 @@ from app.config import settings
 from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, TradeRecord
 
 class PredictionLedger:
+    # Keep high-volume diagnostic history bounded in memory mode. These are
+    # observations/references only; official predictions, settlements and trades
+    # are never pruned by this policy.
+    MEMORY_OBSERVATION_RETENTION = 5000
+    MEMORY_REFERENCE_RETENTION = 1000
+    MEMORY_PRUNE_EVERY_WRITES = 100
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.database_url = getattr(settings, "database_url", None)
@@ -17,6 +24,7 @@ class PredictionLedger:
         # same schema/state and transaction boundaries remain safe across threads.
         self._memory_connection = None
         self._memory_lock = threading.RLock()
+        self._history_writes_since_prune = 0
         if not self.database_url and self._is_memory_path():
             self._memory_connection = sqlite3.connect(
                 self.db_path, timeout=15.0, check_same_thread=False, uri=self.db_path.startswith("file:")
@@ -50,6 +58,29 @@ class PredictionLedger:
 
     def _is_memory_path(self) -> bool:
         return self.db_path == ":memory:" or ("mode=memory" in self.db_path and self.db_path.startswith("file:"))
+
+    def _prune_memory_history(self, conn) -> None:
+        """Periodically cap diagnostic history; never prune scored records or trades."""
+        if self._memory_connection is None:
+            return
+        self._history_writes_since_prune += 1
+        if self._history_writes_since_prune < self.MEMORY_PRUNE_EVERY_WRITES:
+            return
+        self._history_writes_since_prune = 0
+        conn.execute(
+            """DELETE FROM prediction_observations
+               WHERE id NOT IN (
+                   SELECT id FROM prediction_observations ORDER BY id DESC LIMIT ?
+               )""",
+            (self.MEMORY_OBSERVATION_RETENTION,),
+        )
+        conn.execute(
+            """DELETE FROM multi_exchange_reference
+               WHERE id NOT IN (
+                   SELECT id FROM multi_exchange_reference ORDER BY id DESC LIMIT ?
+               )""",
+            (self.MEMORY_REFERENCE_RETENTION,),
+        )
 
     @contextmanager
     def _connection(self, immediate: bool = False):
@@ -280,6 +311,7 @@ class PredictionLedger:
                     bps(primary_spot_price, official_brti_price), bps(reference_price, strike_price),
                 ),
             )
+            self._prune_memory_history(conn)
             return int(cur.lastrowid)
 
     def get_multi_exchange_reference_history(self, limit: int = 200) -> List[dict]:
@@ -426,6 +458,7 @@ class PredictionLedger:
                 "INSERT INTO prediction_observations (contract_ticker, epoch_ts, seconds_remaining, payload_json) VALUES (?, ?, ?, ?)",
                 (contract_ticker, epoch_ts, seconds_remaining, json.dumps(payload, default=lambda value: getattr(value, "value", str(value)))),
             )
+            self._prune_memory_history(conn)
             return int(cur.lastrowid)
 
     def get_recent_prediction_observations(self, limit: int = 100, contract_ticker: Optional[str] = None) -> List[dict]:
