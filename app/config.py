@@ -15,8 +15,17 @@ class Settings:
     max_risk_per_trade_usd: float = float(os.getenv("MAX_RISK_PER_TRADE_USD", "25.0"))
     max_daily_loss_usd: float = float(os.getenv("MAX_DAILY_LOSS_USD", "100.0"))
     min_net_edge_cents: float = float(os.getenv("MIN_NET_EDGE_CENTS", "0.03"))
-    db_path: str = os.getenv("PREDICTOR_DB_PATH", "satsignal_btc15m.db")
-    database_url: str | None = os.getenv("DATABASE_URL") or None
+    # In-memory is the default by request. Set PREDICTOR_IN_MEMORY_STORAGE=0
+    # to opt back into the configured SQLite/PostgreSQL backend.
+    in_memory_storage: bool = os.getenv("PREDICTOR_IN_MEMORY_STORAGE", "1").strip().lower() in {"1", "true", "yes", "on"}
+    db_path: str = os.getenv(
+        "PREDICTOR_DB_PATH",
+        ":memory:" if os.getenv("PREDICTOR_IN_MEMORY_STORAGE", "1").strip().lower() in {"1", "true", "yes", "on"} else "satsignal_btc15m.db",
+    )
+    database_url: str | None = (
+        None if os.getenv("PREDICTOR_IN_MEMORY_STORAGE", "1").strip().lower() in {"1", "true", "yes", "on"}
+        else (os.getenv("DATABASE_URL") or None)
+    )
     kalshi_public_base_url: str = os.getenv("KALSHI_PUBLIC_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
     kalshi_demo_base_url: str = os.getenv("KALSHI_DEMO_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     kalshi_prod_base_url: str = os.getenv("KALSHI_PROD_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
