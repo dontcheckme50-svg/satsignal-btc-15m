@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding
 from app.config import settings
 from app.models import ContractInfo, FeedStatus
+from app.multi_exchange import MultiExchangeReference
 
 def iso_now(ts: Optional[float] = None) -> str:
     t = ts if ts is not None else time.time()
@@ -22,7 +23,7 @@ def safe_age_seconds(timestamp: Optional[float], now: Optional[float] = None) ->
         current = time.time() if now is None else float(now)
     except (TypeError, ValueError, OverflowError):
         return None
-    if not math.isfinite(ts) or ts <= 0 or not math.isfinite(current):
+    if not math.isfinite(ts) or ts <= 0 or not math.isfinite(current) or ts > current + 0.5:
         return None
     return max(0.0, current - ts)
 
@@ -35,6 +36,7 @@ class MarketDataHub:
         self.bars_1s: Deque[Tuple[int, float, float]] = deque(maxlen=3600)
         self._current_sec: int = 0
         self._current_sec_vol: float = 0.0
+        self._current_sec_last_price: Optional[float] = None
         self.bids: List[Tuple[float, float]] = []
         self.asks: List[Tuple[float, float]] = []
         self.last_book_ts: float = 0.0
@@ -51,6 +53,13 @@ class MarketDataHub:
         self._running = False
         self._tasks = []
         self._private_key = self._load_kalshi_key()
+        self.multi_exchange = MultiExchangeReference()
+        self._feed_runtime = {
+            name: {"state": "STOPPED", "restart_count": 0, "last_error": None, "started_ts": None}
+            for name in ("Spot Feed Worker", "Kalshi Feed Worker", "BRTI Feed Worker", "Multi-Exchange Worker")
+        }
+        self._last_brti_value = None
+        self._last_brti_source_ts = None
 
     def _load_kalshi_key(self):
         if not settings.kalshi_key_id:
@@ -78,20 +87,48 @@ class MarketDataHub:
             sig = self._private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
         return base64.b64encode(sig).decode("utf-8")
 
-    def ingest_trade(self, ts: float, price: float, qty: float, is_buyer_maker: bool, source: str) -> None:
+    def ingest_trade(self, ts: float, price: float, qty: float, is_buyer_maker: bool, source: str) -> bool:
+        """Accept only finite, positive, non-future, non-regressing market trades."""
+        try:
+            ts, price, qty = float(ts), float(price), float(qty)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        now = time.time()
+        if (not all(math.isfinite(v) for v in (ts, price, qty)) or ts <= 0 or price <= 0 or qty <= 0
+                or ts > now + 0.5 or not isinstance(is_buyer_maker, bool)):
+            return False
+        source = str(source or "UNKNOWN")
+        # Permit a small exchange-clock offset when switching providers, but do
+        # not let an older packet from the same source roll the live state back.
+        if source == self.active_spot_source and self.last_spot_ts and ts < self.last_spot_ts:
+            return False
+        sec = int(ts)
+        if sec < self._current_sec and source == self.active_spot_source:
+            return False
         self.live_price = price
         self.last_spot_ts = ts
         self.active_spot_source = source
         self.trades.append((ts, price, qty, is_buyer_maker))
-        sec = int(ts)
         if self._current_sec == 0:
             self._current_sec = sec
-        if sec > self._current_sec:
-            self.bars_1s.append((self._current_sec, price, self._current_sec_vol))
-            self._current_sec = sec
+            self._current_sec_last_price = price
             self._current_sec_vol = qty
-        else:
+        elif sec > self._current_sec:
+            # Close the prior second with its own final trade, not the first
+            # trade from the new second.
+            self.bars_1s.append((self._current_sec, self._current_sec_last_price, self._current_sec_vol))
+            self._current_sec = sec
+            self._current_sec_last_price = price
+            self._current_sec_vol = qty
+        elif sec == self._current_sec:
+            self._current_sec_last_price = price
             self._current_sec_vol += qty
+        else:
+            # A newly selected fallback can have a slightly behind exchange
+            # clock. Keep the valid trade/live source, but don't rewrite a bar
+            # already closed by the prior source.
+            return True
+        return True
 
     def ingest_book(
         self,
@@ -99,22 +136,46 @@ class MarketDataHub:
         bids: List[Tuple[float, float]],
         asks: List[Tuple[float, float]],
         source: str = "UNKNOWN",
-    ) -> None:
-        self.bids = sorted(bids, key=lambda x: x[0], reverse=True)[:20]
-        self.asks = sorted(asks, key=lambda x: x[0])[:20]
+    ) -> bool:
+        try:
+            ts = float(ts)
+            parsed_bids = [(float(p), float(q)) for p, q in bids]
+            parsed_asks = [(float(p), float(q)) for p, q in asks]
+        except (TypeError, ValueError, OverflowError):
+            return False
+        now = time.time()
+        if not math.isfinite(ts) or ts <= 0 or ts > now + 0.5 or not parsed_bids or not parsed_asks:
+            return False
+        if any(not math.isfinite(p) or not math.isfinite(q) or p <= 0 or q <= 0 for p, q in parsed_bids + parsed_asks):
+            return False
+        bids_sorted = sorted(parsed_bids, key=lambda x: x[0], reverse=True)[:20]
+        asks_sorted = sorted(parsed_asks, key=lambda x: x[0])[:20]
+        if bids_sorted[0][0] >= asks_sorted[0][0]:
+            return False
+        source = str(source or "UNKNOWN")
+        if source == self.last_book_source and self.last_book_ts and ts < self.last_book_ts:
+            return False
+        self.bids = bids_sorted
+        self.asks = asks_sorted
         self.last_book_ts = ts
         self.last_book_source = source
+        return True
 
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._tasks = [
-            asyncio.create_task(self._spot_stream_loop(), name="spot-feed"),
-            asyncio.create_task(self._kalshi_market_loop(), name="kalshi-feed"),
+        workers = [
+            ("Spot Feed Worker", self._spot_stream_loop),
+            ("Kalshi Feed Worker", self._kalshi_market_loop),
         ]
         if self._private_key and settings.kalshi_key_id:
-            self._tasks.append(asyncio.create_task(self._brti_poll_loop(), name="brti-feed"))
+            workers.append(("BRTI Feed Worker", self._brti_poll_loop))
+        workers.append(("Multi-Exchange Worker", self._run_multi_exchange_worker))
+        self._tasks = [
+            asyncio.create_task(self._run_supervised_feed(name, worker), name=name)
+            for name, worker in workers
+        ]
 
     async def stop(self) -> None:
         self._running = False
@@ -123,6 +184,121 @@ class MarketDataHub:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        try:
+            await self.multi_exchange.stop()
+        except Exception:
+            pass
+
+    async def _run_multi_exchange_worker(self) -> None:
+        await self.multi_exchange.start()
+        try:
+            while self._running:
+                await asyncio.sleep(1.0)
+        finally:
+            await self.multi_exchange.stop()
+
+    async def _run_supervised_feed(self, name: str, worker, retry_delay: float = 1.5) -> None:
+        runtime = self._feed_runtime.setdefault(name, {"state": "STOPPED", "restart_count": 0, "last_error": None, "started_ts": None})
+        while self._running:
+            runtime["state"] = "RUNNING"
+            runtime["started_ts"] = time.time()
+            try:
+                await worker()
+                if self._running:
+                    runtime["state"] = "RESTARTING"
+                    runtime["last_error"] = "Worker returned unexpectedly"
+                    runtime["restart_count"] += 1
+                    await asyncio.sleep(retry_delay)
+                else:
+                    runtime["state"] = "STOPPED"
+                    return
+            except asyncio.CancelledError:
+                runtime["state"] = "STOPPED"
+                raise
+            except Exception as exc:
+                runtime["last_error"] = f"{type(exc).__name__}: {exc}"
+                runtime["restart_count"] += 1
+                runtime["state"] = "RESTARTING" if self._running else "STOPPED"
+                if self._running:
+                    await asyncio.sleep(retry_delay)
+        runtime["state"] = "STOPPED"
+
+    @staticmethod
+    def _parse_exchange_timestamp(value, fallback: Optional[float] = None) -> Optional[float]:
+        if value is None or value == "":
+            return fallback
+        try:
+            if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().replace(".", "", 1).isdigit()):
+                number = float(value)
+                if not math.isfinite(number) or number <= 0:
+                    return fallback
+                return number / 1000.0 if number > 100_000_000_000 else number
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            result = parsed.timestamp()
+            return result if math.isfinite(result) and result > 0 else fallback
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+
+    @staticmethod
+    def _coinbase_is_buyer_maker(side):
+        normalized = str(side or "").strip().lower()
+        if normalized == "buy":
+            return True
+        if normalized == "sell":
+            return False
+        return None
+
+    @staticmethod
+    def _coinbase_ticker_book(msg):
+        try:
+            bid, ask = float(msg["best_bid"]), float(msg["best_ask"])
+            bid_size, ask_size = float(msg["best_bid_size"]), float(msg["best_ask_size"])
+            values = (bid, ask, bid_size, ask_size)
+            if not all(math.isfinite(v) and v > 0 for v in values) or bid >= ask:
+                return None
+            return ([(bid, bid_size)], [(ask, ask_size)])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _parse_brti_value(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) and number > 0 else None
+
+    @classmethod
+    def _parse_brti_payload(cls, payload, now: Optional[float] = None):
+        now = time.time() if now is None else float(now)
+        if not isinstance(payload, dict):
+            return None
+        data = payload.get("data", payload)
+        if isinstance(data, dict) and "payload" in data:
+            data = data["payload"]
+        rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for item in reversed(rows):
+            if not isinstance(item, dict) or item.get("repeatOfPreviousValue") is True:
+                continue
+            value = cls._parse_brti_value(item.get("value"))
+            ts = cls._parse_exchange_timestamp(item.get("time", item.get("timestamp")))
+            if value is None or ts is None or ts > now + 0.5 or now - ts > 10.0:
+                continue
+            return value, ts
+        return None
+
+    def get_multi_exchange_snapshot(self, now: Optional[float] = None) -> dict:
+        now = time.time() if now is None else float(now)
+        snapshot = self.multi_exchange.get_snapshot(now)
+        snapshot["primary_spot_price"] = self.live_price
+        snapshot["primary_spot_source"] = self.active_spot_source
+        snapshot["official_brti_price"] = (
+            self.official_brti_price if self.brti_status == "LIVE" and safe_age_seconds(self.last_brti_ts, now) is not None
+            and safe_age_seconds(self.last_brti_ts, now) <= settings.stale_feed_threshold_sec else None
+        )
+        return snapshot
 
     async def fetch_verified_kalshi_settlement(self, ticker: str) -> Optional[Tuple[str, Optional[float]]]:
         if not ticker.startswith("KXBTC15M"):
@@ -141,12 +317,29 @@ class MarketDataHub:
 
     async def _spot_stream_loop(self) -> None:
         use_coinbase = False
+        next_primary_retry = 0.0
         while self._running:
             try:
-                if not use_coinbase: await self._run_binance_ws()
-                else: await self._run_coinbase_ws()
+                if not use_coinbase:
+                    await self._run_binance_ws()
+                    if self._running:
+                        raise RuntimeError("Binance websocket closed")
+                else:
+                    await self._run_coinbase_ws()
+                    if self._running:
+                        raise RuntimeError("Coinbase websocket closed")
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                use_coinbase = True if ("451" in str(exc) or "403" in str(exc)) else (not use_coinbase)
+                message = str(exc)
+                now = time.monotonic()
+                if not use_coinbase:
+                    # Any primary failure triggers fallback; once the fallback
+                    # session ends, immediately retry primary on the next cycle.
+                    use_coinbase = True
+                    next_primary_retry = now
+                else:
+                    use_coinbase = False
                 await asyncio.sleep(1.5)
 
     async def _run_binance_ws(self) -> None:
@@ -156,9 +349,9 @@ class MarketDataHub:
                 payload = json.loads(raw)
                 stream, data, now = payload.get("stream", ""), payload.get("data", {}), time.time()
                 if "aggTrade" in stream:
-                    self.ingest_trade(now, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
+                    self.ingest_trade(self._parse_exchange_timestamp(data.get("T", data.get("E")), now), float(data["p"]), float(data["q"]), data.get("m") is True, "BINANCE_SPOT")
                 elif "depth20" in stream:
-                    self.ingest_book(now, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])], "BINANCE_SPOT")
+                    self.ingest_book(self._parse_exchange_timestamp(data.get("E"), now), [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])], "BINANCE_SPOT")
 
     async def _run_coinbase_ws(self) -> None:
         sub = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["matches", "ticker"]}
@@ -168,9 +361,11 @@ class MarketDataHub:
                 if not self._running: break
                 msg, now = json.loads(raw), time.time()
                 if msg.get("type") == "match":
-                    self.ingest_trade(now, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
-                elif msg.get("type") == "ticker" and "best_bid" in msg and "best_ask" in msg:
-                    self.ingest_book(now, [(float(msg["best_bid"]), float(msg.get("best_bid_size", 1.0)))], [(float(msg["best_ask"]), float(msg.get("best_ask_size", 1.0)))], "COINBASE_FALLBACK")
+                    self.ingest_trade(self._parse_exchange_timestamp(msg.get("time"), now), float(msg["price"]), float(msg["size"]), self._coinbase_is_buyer_maker(msg.get("side")) is True, "COINBASE_FALLBACK")
+                elif msg.get("type") == "ticker":
+                    parsed_book = self._coinbase_ticker_book(msg)
+                    if parsed_book:
+                        self.ingest_book(self._parse_exchange_timestamp(msg.get("time"), now), parsed_book[0], parsed_book[1], "COINBASE_FALLBACK")
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
@@ -256,31 +451,69 @@ class MarketDataHub:
                     headers = {"KALSHI-ACCESS-KEY": settings.kalshi_key_id or "", "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint), "KALSHI-ACCESS-TIMESTAMP": ts_ms}
                     async with session.get(url, headers=headers, timeout=5) as resp:
                         if resp.status == 200:
-                            val = (await resp.json()).get("data", {}).get("payload", {}).get("value")
-                            if val is not None:
-                                self.official_brti_price, self.last_brti_ts, self.brti_status, self.brti_detail = float(val), time.time(), "LIVE", "Official CF Benchmarks BRTI"
+                            parsed = self._parse_brti_payload(await resp.json())
+                            if parsed:
+                                value, source_ts = parsed
+                                if source_ts != self._last_brti_source_ts or value != self._last_brti_value:
+                                    self.official_brti_price = value
+                                    self.last_brti_ts = source_ts
+                                    self.brti_status = "LIVE"
+                                    self.brti_detail = "Official CF Benchmarks BRTI"
+                                    self._last_brti_source_ts, self._last_brti_value = source_ts, value
+                                else:
+                                    self.brti_status = "STALE"
+                                    self.brti_detail = "BRTI source value/timestamp has not advanced"
                         elif resp.status in (401, 403):
                             self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
-                            break
+                            return
+                        else:
+                            self.brti_status, self.brti_detail = "UNAVAILABLE", f"HTTP {resp.status}"
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     self.brti_status, self.brti_detail = "UNAVAILABLE", f"BRTI check error: {e}"
                 await asyncio.sleep(2.0)
 
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
-        spot_age = round(now - self.last_spot_ts, 2) if self.last_spot_ts else None
-        spot_status = "UNAVAILABLE" if spot_age is None else ("STALE" if spot_age > settings.stale_feed_threshold_sec else ("LIVE" if self.active_spot_source == "BINANCE_SPOT" else "FALLBACK"))
-        book_age = round(now - self.last_book_ts, 2) if self.last_book_ts else None
-        book_status = "LIVE" if (book_age is not None and book_age <= settings.stale_feed_threshold_sec) else ("STALE" if book_age is not None else "UNAVAILABLE")
-        kalshi_age = round(now - self.last_kalshi_ts, 2) if self.last_kalshi_ts else None
-        kalshi_status = (
-            "LIVE" if (self.kalshi_contract is not None and self.kalshi_contract.close_timestamp > now and kalshi_age is not None and kalshi_age <= 12.0)
-            else ("STALE" if self.kalshi_contract is not None and kalshi_age is not None and kalshi_age > 12.0 else "UNAVAILABLE")
-        )
-        brti_age = round(now - self.last_brti_ts, 2) if self.last_brti_ts else None
-        return [
-            FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts else None, age_seconds=spot_age, detail=self.active_spot_source),
-            FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts else None, age_seconds=book_age, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels"),
-            FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts else None, age_seconds=kalshi_age, detail=self.kalshi_status_detail),
-            FeedStatus(name="CF Benchmarks BRTI", status=self.brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts else None, age_seconds=brti_age, detail=self.brti_detail),
+        def status_for(ts):
+            if not ts:
+                return "UNAVAILABLE", None
+            age = now - ts
+            if age < -0.5:
+                return "FUTURE_TIMESTAMP", age
+            if age > settings.stale_feed_threshold_sec:
+                return "STALE", age
+            return "LIVE", age
+
+        spot_status, spot_age = status_for(self.last_spot_ts)
+        if spot_status == "LIVE" and self.active_spot_source != "BINANCE_SPOT":
+            spot_status = "FALLBACK"
+        book_status, book_age = status_for(self.last_book_ts)
+        if book_status in ("LIVE", "FALLBACK") and self.active_spot_source and self.last_book_source != self.active_spot_source:
+            book_status = "SOURCE_MISMATCH"
+        kalshi_status, kalshi_age = status_for(self.last_kalshi_ts)
+        if kalshi_status == "LIVE" and (self.kalshi_contract is None or self.kalshi_contract.close_timestamp <= now):
+            kalshi_status = "UNAVAILABLE"
+        brti_status, brti_age = status_for(self.last_brti_ts)
+        if self.brti_status == "UNAVAILABLE" or self.official_brti_price is None or not self.last_brti_ts:
+            brti_status = "UNAVAILABLE"
+        elif brti_status == "LIVE" and self.brti_status != "LIVE":
+            brti_status = self.brti_status
+        if brti_status == "LIVE" and self._last_brti_source_ts is not None and self._last_brti_source_ts == self._last_brti_value:
+            brti_status = "STALE"
+
+        statuses = [
+            FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts > 0 else None, age_seconds=round(spot_age, 2) if spot_age is not None else None, detail=self.active_spot_source),
+            FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts > 0 else None, age_seconds=round(book_age, 2) if book_age is not None else None, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels; source={self.last_book_source}"),
+            FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts > 0 else None, age_seconds=round(kalshi_age, 2) if kalshi_age is not None else None, detail=self.kalshi_status_detail),
+            FeedStatus(name="CF Benchmarks BRTI", status=brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts > 0 else None, age_seconds=round(brti_age, 2) if brti_age is not None else None, detail=self.brti_detail),
         ]
+        for name, runtime in self._feed_runtime.items():
+            if runtime.get("restart_count", 0) or runtime.get("state") not in (None, "STOPPED"):
+                detail = f"state={runtime.get('state')}; restarts={runtime.get('restart_count', 0)}"
+                if runtime.get("last_error"):
+                    detail += f"; last_error={runtime['last_error']}"
+                age = safe_age_seconds(runtime.get("started_ts"), now)
+                statuses.append(FeedStatus(name=name, status=runtime.get("state", "STOPPED"), last_updated_iso=iso_now(runtime["started_ts"]) if runtime.get("started_ts") else None, age_seconds=round(age, 2) if age is not None else None, detail=detail))
+        return statuses
