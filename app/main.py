@@ -143,6 +143,19 @@ async def get_multi_exchange():
     contract = orchestrator.active_contract
     snapshot["strike_price"] = contract.strike_price if contract else None
     reference_price = snapshot.get("reference_price")
+    primary_spot_price = snapshot.get("primary_spot_price")
+    snapshot["reference_vs_primary_bps"] = (
+        round(
+            (float(reference_price) - float(primary_spot_price))
+            / float(primary_spot_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and primary_spot_price is not None
+        and float(primary_spot_price) > 0
+        else None
+    )
     snapshot["reference_vs_strike_bps"] = (
         round((float(reference_price) - float(contract.strike_price)) / float(contract.strike_price) * 10000.0, 4)
         if reference_price is not None and contract and contract.strike_price > 0 else None
