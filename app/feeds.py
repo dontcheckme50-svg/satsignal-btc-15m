@@ -36,11 +36,19 @@ class MarketDataHub:
         self._private_key = self._load_kalshi_key()
 
     def _load_kalshi_key(self):
-        if not settings.kalshi_key_id or not settings.kalshi_private_key_path:
+        if not settings.kalshi_key_id:
             return None
+
         try:
-            with open(settings.kalshi_private_key_path, "rb") as f:
-                return serialization.load_pem_private_key(f.read(), password=None)
+            if settings.kalshi_private_key:
+                pem_data = settings.kalshi_private_key.replace("\\n", "\n").encode("utf-8")
+            elif settings.kalshi_private_key_path:
+                with open(settings.kalshi_private_key_path, "rb") as f:
+                    pem_data = f.read()
+            else:
+                return None
+
+            return serialization.load_pem_private_key(pem_data, password=None)
         except Exception as e:
             self.brti_detail = f"Key load error: {e}"
             return None
