@@ -6,6 +6,21 @@ from typing import Dict, List, Optional
 from app.config import settings
 from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, TradeRecord
 
+
+def _parse_market_regime(raw):
+    if isinstance(raw, MarketRegime):
+        return raw
+
+    try:
+        return MarketRegime(raw)
+    except ValueError:
+        try:
+            return MarketRegime[raw]
+        except KeyError:
+            raise ValueError(
+                f"Unknown MarketRegime value: {raw!r}"
+            ) from None
+
 class PredictionLedger:
     # Keep high-volume diagnostic history bounded in memory mode. These are
     # observations/references only; official predictions, settlements and trades
@@ -609,7 +624,7 @@ class PredictionLedger:
                     seconds_remaining=r["seconds_remaining"], main_signal=Signal(r["main_signal"]),
                     early_signal=Signal(r["early_signal"]), final_signal=Signal(r["final_signal"]),
                     confidence=r["confidence"], up_prob=r["up_prob"], down_prob=r["down_prob"],
-                    regime=MarketRegime(r["regime"]), brti_cohort=r["brti_cohort"],
+                    regime=_parse_market_regime(r["regime"]), brti_cohort=r["brti_cohort"],
                     brti_side_at_lock=r["brti_side_at_lock"], spot_side_at_lock=r["spot_side_at_lock"],
                     settled=bool(r["settled"]), settlement_source=r["settlement_source"],
                     settlement_price=r["settlement_price"], actual_outcome=r["actual_outcome"],
