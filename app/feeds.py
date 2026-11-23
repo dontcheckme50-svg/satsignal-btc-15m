@@ -12,6 +12,20 @@ def iso_now(ts: Optional[float] = None) -> str:
     t = ts if ts is not None else time.time()
     return datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+
+def safe_age_seconds(timestamp: Optional[float], now: Optional[float] = None) -> Optional[float]:
+    """Return a non-negative age in seconds, or None when no valid timestamp exists."""
+    if timestamp is None:
+        return None
+    try:
+        ts = float(timestamp)
+        current = time.time() if now is None else float(now)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(ts) or ts <= 0 or not math.isfinite(current):
+        return None
+    return max(0.0, current - ts)
+
 class MarketDataHub:
     def __init__(self):
         self.live_price: Optional[float] = None
