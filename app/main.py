@@ -142,8 +142,11 @@ async def get_multi_exchange():
     snapshot = hub.get_multi_exchange_snapshot()
     contract = orchestrator.active_contract
     snapshot["strike_price"] = contract.strike_price if contract else None
+
     reference_price = snapshot.get("reference_price")
     primary_spot_price = snapshot.get("primary_spot_price")
+    official_brti_price = snapshot.get("official_brti_price")
+
     snapshot["reference_vs_primary_bps"] = (
         round(
             (float(reference_price) - float(primary_spot_price))
@@ -156,11 +159,32 @@ async def get_multi_exchange():
         and float(primary_spot_price) > 0
         else None
     )
+    snapshot["reference_vs_brti_bps"] = (
+        round(
+            (float(reference_price) - float(official_brti_price))
+            / float(official_brti_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and official_brti_price is not None
+        and float(official_brti_price) > 0
+        else None
+    )
     snapshot["reference_vs_strike_bps"] = (
-        round((float(reference_price) - float(contract.strike_price)) / float(contract.strike_price) * 10000.0, 4)
-        if reference_price is not None and contract and contract.strike_price > 0 else None
+        round(
+            (float(reference_price) - float(contract.strike_price))
+            / float(contract.strike_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and contract
+        and contract.strike_price > 0
+        else None
     )
     return snapshot
+
 
 @app.get("/api/multi-exchange/history")
 async def get_multi_exchange_history(limit: int = Query(default=200, ge=1, le=1000)):
