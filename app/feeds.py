@@ -38,6 +38,9 @@ class MarketDataHub:
         self.bids: List[Tuple[float, float]] = []
         self.asks: List[Tuple[float, float]] = []
         self.last_book_ts: float = 0.0
+        # Track which venue supplied the latest order book so the orchestrator
+        # can reject book data that does not match the active spot feed.
+        self.last_book_source: str = "NONE"
         self.kalshi_contract: Optional[ContractInfo] = None
         self.last_kalshi_ts: float = 0.0
         self.kalshi_status_detail: str = "Initializing..."
@@ -90,10 +93,17 @@ class MarketDataHub:
         else:
             self._current_sec_vol += qty
 
-    def ingest_book(self, ts: float, bids: List[Tuple[float, float]], asks: List[Tuple[float, float]]) -> None:
+    def ingest_book(
+        self,
+        ts: float,
+        bids: List[Tuple[float, float]],
+        asks: List[Tuple[float, float]],
+        source: str = "UNKNOWN",
+    ) -> None:
         self.bids = sorted(bids, key=lambda x: x[0], reverse=True)[:20]
         self.asks = sorted(asks, key=lambda x: x[0])[:20]
         self.last_book_ts = ts
+        self.last_book_source = source
 
     async def start(self) -> None:
         if self._running:
@@ -148,7 +158,7 @@ class MarketDataHub:
                 if "aggTrade" in stream:
                     self.ingest_trade(now, float(data["p"]), float(data["q"]), bool(data["m"]), "BINANCE_SPOT")
                 elif "depth20" in stream:
-                    self.ingest_book(now, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])])
+                    self.ingest_book(now, [(float(p), float(q)) for p, q in data.get("bids", [])], [(float(p), float(q)) for p, q in data.get("asks", [])], "BINANCE_SPOT")
 
     async def _run_coinbase_ws(self) -> None:
         sub = {"type": "subscribe", "product_ids": ["BTC-USD"], "channels": ["matches", "ticker"]}
@@ -160,7 +170,7 @@ class MarketDataHub:
                 if msg.get("type") == "match":
                     self.ingest_trade(now, float(msg["price"]), float(msg["size"]), msg.get("side") == "buy", "COINBASE_FALLBACK")
                 elif msg.get("type") == "ticker" and "best_bid" in msg and "best_ask" in msg:
-                    self.ingest_book(now, [(float(msg["best_bid"]), float(msg.get("best_bid_size", 1.0)))], [(float(msg["best_ask"]), float(msg.get("best_ask_size", 1.0)))])
+                    self.ingest_book(now, [(float(msg["best_bid"]), float(msg.get("best_bid_size", 1.0)))], [(float(msg["best_ask"]), float(msg.get("best_ask_size", 1.0)))], "COINBASE_FALLBACK")
 
     @staticmethod
     def _parse_kalshi_time(value: str) -> float:
