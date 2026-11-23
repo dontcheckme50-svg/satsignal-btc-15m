@@ -30,6 +30,7 @@ class Settings:
     kalshi_demo_base_url: str = os.getenv("KALSHI_DEMO_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     kalshi_prod_base_url: str = os.getenv("KALSHI_PROD_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
     kalshi_key_id: str | None = os.getenv("KALSHI_KEY_ID") or None
+    kalshi_private_key: str | None = os.getenv("KALSHI_PRIVATE_KEY") or None
     kalshi_private_key_path: str | None = os.getenv("KALSHI_PRIVATE_KEY_PATH") or None
     binance_ws_url: str = "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@depth20@100ms"
     coinbase_ws_url: str = "wss://ws-feed.exchange.coinbase.com"
@@ -68,4 +69,3 @@ storage_mount_status = (
         required=persistent_storage_required,
     )
 )
-
