@@ -38,4 +38,4 @@ A successful process health response by itself is not proof that a valid officia
 - WAIT signals are excluded from directional win-rate denominators and shown separately.
 - Paper-trade P&L is separate from prediction accuracy.
 - Official CF Benchmarks BRTI is never substituted with Binance spot. Missing entitlement leaves the BRTI component inactive.
-- The five prediction engines and the separate multi-exchange shadow feed remain independent as documented in the README.
+- The six prediction engines and the separate multi-exchange shadow feed remain independent as documented in the README.
