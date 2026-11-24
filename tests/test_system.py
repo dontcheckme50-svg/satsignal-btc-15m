@@ -211,3 +211,10 @@ def test_dashboard_countdown_uses_absolute_contract_timestamps():
     assert 'contractCloseEpochMs = Number(d.contract.close_timestamp) * 1000' in DASHBOARD_HTML
     assert 'setInterval(tickTimers, 250)' in DASHBOARD_HTML
     assert 'Date.now() + serverClockOffsetMs' in DASHBOARD_HTML
+
+
+def test_in_memory_ledger_persists_across_operations():
+    ledger = PredictionLedger(":memory:")
+    ledger.record_prediction(_prediction_record("KXBTC15M-MEMORY"))
+    assert len(ledger.get_recent_predictions()) == 1
+    assert ledger.get_scoreboard().total_predictions == 1
