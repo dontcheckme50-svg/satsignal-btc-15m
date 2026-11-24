@@ -143,6 +143,7 @@ def test_http_dashboard_and_health_endpoints():
     assert 'id="market-health"' in dashboard
     assert dashboard.count('document.getElementById("forecast-lock-button").addEventListener("click"') == 1
     assert 'function startStateFallback()' in dashboard
+    assert 'if (activeSocket !== ws) return;' in dashboard
     assert 'fetchOrchestratorHealth' in dashboard
     assert client.get("/docs").status_code == 200
     health = client.get("/api/health")
