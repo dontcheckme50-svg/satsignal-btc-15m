@@ -172,7 +172,7 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
 def test_trade_table_has_settlement_timestamp_column(tmp_path):
     ledger = PredictionLedger()
     with ledger._connection() as conn:
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
+        columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("trades",)).fetchall()}
     assert "settled_at" in columns
 
 
