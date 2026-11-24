@@ -23,11 +23,13 @@ The dashboard redesign changes presentation and reporting; it does not change th
 
 ## Local run (Windows PowerShell)
 
+Configure `DATABASE_URL` with your Supabase project's PostgreSQL connection string (use SSL; keep credentials private), then run:
+
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:TRADING_MODE = "paper"
-$env:PREDICTOR_DB_PATH = "$PWD\satsignal_btc15m.db"
+$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:PORT/postgres?sslmode=require"
 .\.venv\Scripts\python.exe -m app.main
 ```
 
@@ -35,7 +37,7 @@ Open `http://localhost:8000`. API docs: `/docs`; health: `/api/health`; scoreboa
 
 ## Deployment and persistence
 
-Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_DB_PATH` to a mounted persistent volume path if the host provides one. A container's ephemeral filesystem may be wiped on restart; do not assume the scoreboard/history will survive without persistent storage. Do not activate paid storage without explicit approval.
+Supabase PostgreSQL is the only ledger backend. Configure the secret `DATABASE_URL` with the Supabase PostgreSQL connection string and SSL enabled. The service fails closed on ledger operations if it is missing; it never creates local or in-memory storage. Keep the connection string out of source control and logs.
 
 ## Feeds
 
