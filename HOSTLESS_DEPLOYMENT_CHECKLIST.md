@@ -10,7 +10,7 @@ This project is a Dockerized FastAPI app. Hostless supports Git-connected apps b
 4. Set the health-check path to `/api/health`.
 5. Keep the app at one replica and paper-only mode. This release hardcodes `trading_mode = "paper"` and has no live/demo order-submission path.
 6. Do **not** create or attach a paid volume or resize beyond the account's free entitlement. Review the current resource estimate before confirming creation or deployment.
-7. The current release uses SQLite. Without persistent storage, prediction history, trade history, and scoreboard records may be lost when the container is replaced. Do not assume the container filesystem is durable. For durable cloud history, use an included/free managed database allowance only after confirming the exact cost in the Hostless UI and migrating the app database deliberately. A new volume can incur charges.
+7. Configure the secret `DATABASE_URL` with the project's Supabase PostgreSQL connection string and SSL enabled. The app uses Supabase for prediction, trade, and scoreboard persistence; it does not use SQLite or a local database file. Do not commit the connection string.
 8. Deploy and verify:
    - `/api/health` returns `status: ok` and `trading_mode: paper`
    - `/` displays the dashboard
