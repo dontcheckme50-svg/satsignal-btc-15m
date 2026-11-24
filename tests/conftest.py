@@ -16,6 +16,14 @@ if not TEST_DATABASE_URL:
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
+@pytest.fixture(scope="session", autouse=True)
+def initialize_test_schema():
+    """Create the isolated PostgreSQL schema before any per-test cleanup."""
+    from app.database import PredictionLedger
+
+    PredictionLedger()
+
+
 @pytest.fixture(autouse=True)
 def clear_test_ledger():
     """Every test gets an empty ledger in the dedicated test database only."""
