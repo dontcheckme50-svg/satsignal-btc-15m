@@ -32,7 +32,7 @@ def clear_test_ledger():
     conn = connect(TEST_DATABASE_URL)
     try:
         conn.execute(
-            "TRUNCATE TABLE predictions, prediction_observations, trades, "
+            "TRUNCATE TABLE predictions, prediction_observations, forecast_locks, trades, "
             "multi_exchange_reference RESTART IDENTITY CASCADE"
         )
         conn.commit()
