@@ -70,3 +70,25 @@ def test_missing_kalshi_private_key_reports_configuration_hint(monkeypatch):
 
     assert hub._load_kalshi_key() is None
     assert "KALSHI_PRIVATE_KEY_PATH" in hub.brti_detail
+
+
+def test_load_kalshi_key_from_existing_private_key_env_when_it_is_a_file_path(monkeypatch, tmp_path):
+    path = tmp_path / "hostless-mounted-kalshi.pem"
+    path.write_bytes(_pem())
+    monkeypatch.setattr(
+        feeds_module,
+        "settings",
+        types.SimpleNamespace(
+            kalshi_key_id="test-key-id",
+            # Existing Hostless variable is named KALSHI_PRIVATE_KEY,
+            # but its value is a mounted file path rather than inline PEM.
+            kalshi_private_key=str(path),
+            kalshi_private_key_path=None,
+        ),
+    )
+    hub = MarketDataHub.__new__(MarketDataHub)
+    hub.brti_detail = ""
+
+    loaded = hub._load_kalshi_key()
+
+    assert isinstance(loaded, ed25519.Ed25519PrivateKey)
