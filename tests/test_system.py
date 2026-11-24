@@ -1,5 +1,11 @@
+import os
 import time
+import pytest
 from pathlib import Path
+
+# Use a dedicated Supabase test database; never point tests at production.
+if os.getenv('TEST_DATABASE_URL'):
+    os.environ['DATABASE_URL'] = os.environ['TEST_DATABASE_URL']
 
 from app.config import settings
 from app.database import PredictionLedger
@@ -46,8 +52,9 @@ def test_paper_mode_is_forced():
     assert settings.trading_mode == "paper"
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_database_round_trip_and_scoreboard(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     rec = PredictionRecord(
         contract_ticker="KXBTC15M-TEST",
         timestamp_iso="2026-11-17 00:00:00 UTC",
@@ -68,8 +75,9 @@ def test_database_round_trip_and_scoreboard(tmp_path):
     assert ledger.get_scoreboard().waits_issued == 0
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_execution_refuses_synthetic_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     manager = ExecutionManager(hub, ledger)
     synthetic = _contract(
@@ -83,8 +91,9 @@ def test_execution_refuses_synthetic_contract(tmp_path):
     assert ledger.get_recent_trades() == []
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_execution_requires_real_kalshi_ask(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     manager = ExecutionManager(hub, ledger)
     no_quote = _contract(yes_ask_dollars=None)
@@ -94,8 +103,9 @@ def test_execution_requires_real_kalshi_ask(tmp_path):
     assert ledger.get_recent_trades() == []
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_execution_places_at_most_one_paper_trade_per_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     manager = ExecutionManager(hub, ledger)
     contract = _contract()
@@ -126,10 +136,11 @@ def test_http_dashboard_and_health_endpoints():
     assert health.json()["trading_mode"] == "paper"
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_synthetic_contracts_are_not_scored(tmp_path):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     now = time.time()
     for i in range(40):
@@ -142,8 +153,9 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
     assert ledger.get_recent_predictions() == []
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_trade_table_has_settlement_timestamp_column(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     with ledger._connection() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
     assert "settled_at" in columns
@@ -167,8 +179,9 @@ def _prediction_record(ticker, final=Signal.UP, main=Signal.UP, early=Signal.DOW
     )
 
 
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
 def test_scoreboard_tracks_pending_and_each_engine_accuracy(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "scoreboard.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-A", final=Signal.UP, main=Signal.UP, early=Signal.DOWN))
     ledger.record_prediction(_prediction_record("KXBTC15M-B", final=Signal.UP, main=Signal.WAIT, early=Signal.DOWN, ts=1794873630.0))
     ledger.record_prediction(_prediction_record("KXBTC15M-C", final=Signal.WAIT, main=Signal.UP, early=Signal.UP, ts=1794873660.0))
@@ -213,8 +226,9 @@ def test_dashboard_countdown_uses_absolute_contract_timestamps():
     assert 'Date.now() + serverClockOffsetMs' in DASHBOARD_HTML
 
 
-def test_in_memory_ledger_persists_across_operations():
-    ledger = PredictionLedger(":memory:")
+@pytest.mark.skipif(not os.getenv("TEST_DATABASE_URL"), reason="requires a dedicated Supabase TEST_DATABASE_URL")
+def test_supabase_ledger_persists_across_operations():
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-MEMORY"))
     assert len(ledger.get_recent_predictions()) == 1
     assert ledger.get_scoreboard().total_predictions == 1
