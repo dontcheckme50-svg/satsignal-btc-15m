@@ -412,6 +412,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const res = await fetch("/api/forecast/lock", {method:"POST", headers:{"Content-Type":"application/json"}});
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail || "Forecast lock was rejected");
+      forecastLockReady = false;
+      button.disabled = true;
       note.textContent = "Forecast locked for this contract. This is not a trade or Engine E lock.";
       await fetchInitial();
     } catch (err) {
