@@ -1,5 +1,4 @@
 import asyncio
-import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -65,7 +64,7 @@ def test_paper_mode_is_forced():
 
 
 def test_database_round_trip_and_scoreboard(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     rec = PredictionRecord(
         contract_ticker="KXBTC15M-TEST",
         timestamp_iso="2026-11-17 00:00:00 UTC",
@@ -87,7 +86,7 @@ def test_database_round_trip_and_scoreboard(tmp_path):
 
 
 def test_execution_refuses_synthetic_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     manager = ExecutionManager(hub, ledger)
     synthetic = _contract(
@@ -102,7 +101,7 @@ def test_execution_refuses_synthetic_contract(tmp_path):
 
 
 def test_execution_requires_real_kalshi_ask(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     no_quote = _contract(yes_ask_dollars=None)
     hub = _fresh_execution_hub(no_quote)
     manager = ExecutionManager(hub, ledger)
@@ -113,7 +112,7 @@ def test_execution_requires_real_kalshi_ask(tmp_path):
 
 
 def test_execution_places_at_most_one_paper_trade_per_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     contract = _contract()
     hub = _fresh_execution_hub(contract)
     manager = ExecutionManager(hub, ledger)
@@ -151,7 +150,7 @@ def test_http_dashboard_and_health_endpoints():
 def test_synthetic_contracts_are_not_scored(tmp_path):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     now = time.time()
     for i in range(40):
@@ -171,7 +170,7 @@ def test_synthetic_contracts_are_not_scored(tmp_path):
 
 
 def test_trade_table_has_settlement_timestamp_column(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "ledger.db"))
+    ledger = PredictionLedger()
     with ledger._connection() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
     assert "settled_at" in columns
@@ -196,7 +195,7 @@ def _prediction_record(ticker, final=Signal.UP, main=Signal.UP, early=Signal.DOW
 
 
 def test_scoreboard_tracks_pending_and_each_engine_accuracy(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "scoreboard.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-A", final=Signal.UP, main=Signal.UP, early=Signal.DOWN))
     ledger.record_prediction(_prediction_record("KXBTC15M-B", final=Signal.UP, main=Signal.WAIT, early=Signal.DOWN, ts=1794873630.0))
     ledger.record_prediction(_prediction_record("KXBTC15M-C", final=Signal.WAIT, main=Signal.UP, early=Signal.UP, ts=1794873660.0))
@@ -223,7 +222,7 @@ def test_scoreboard_tracks_pending_and_each_engine_accuracy(tmp_path):
 def test_synthetic_contract_window_is_exactly_15_minutes():
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(":memory:")
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     orchestrator = PredictorOrchestrator(hub, ledger)
     now = 1794873675.25
@@ -245,7 +244,7 @@ def test_dashboard_countdown_uses_absolute_contract_timestamps():
 async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp_path):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "worker-health.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
     calls = {"evaluate": 0}
 
@@ -307,7 +306,7 @@ def test_orchestrator_only_passes_fresh_official_brti_to_evidence(monkeypatch, t
         )
 
     orchestrator = PredictorOrchestrator(
-        hub, PredictionLedger(str(tmp_path / f"orchestrator-brti-{brti_mode}.db"))
+        hub, PredictionLedger()
     )
     captured = {}
     original_analyze = orchestrator.evidence_engine.analyze
@@ -555,7 +554,7 @@ def test_ingest_book_rejects_crossed_invalid_and_future_books():
 @pytest.mark.asyncio
 async def test_synthetic_contracts_are_not_settled_with_later_fallback_price(tmp_path):
     from app.orchestrator import PredictorOrchestrator
-    ledger = PredictionLedger(str(tmp_path / "synthetic-unsettled.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("SYNTH-BTC15M-OLD"))
     orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
 
@@ -694,7 +693,7 @@ def test_orchestrator_filters_future_bars_before_regime_engine(monkeypatch, tmp_
         (int(now - 5), 89999.0, 0.1),
         (int(now + 100), 999999.0, 100.0),
     ])
-    orchestrator = PredictorOrchestrator(hub, PredictionLedger(str(tmp_path / "regime-bars.db")))
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger())
     captured = {}
     original = orchestrator.regime_engine.analyze
 
@@ -717,7 +716,7 @@ def test_future_kalshi_timestamp_cannot_authorize_official_contract():
     now = time.time()
     hub.kalshi_contract = _contract(open_timestamp=now - 100.0, close_timestamp=now + 800.0)
     hub.last_kalshi_ts = now + 5.0
-    orchestrator = PredictorOrchestrator(hub, PredictionLedger(":memory:"))
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger())
 
     resolved = orchestrator._resolve_active_contract(now, 90000.0)
 
@@ -750,7 +749,7 @@ async def test_primary_spot_stream_clean_close_is_backed_off(monkeypatch):
 
 
 def test_unsettled_settlement_queue_contains_only_official_contracts_and_is_ordered(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "settlement-queue.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("SYNTH-BTC15M-A", ts=1794873600.0))
     ledger.record_prediction(_prediction_record("KXBTC15M-NEW", ts=1794873700.0))
     ledger.record_prediction(_prediction_record("KXBTC15M-OLD", ts=1794873500.0))
@@ -762,7 +761,7 @@ def test_unsettled_settlement_queue_contains_only_official_contracts_and_is_orde
 async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent(tmp_path, monkeypatch):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "settlement-batch.db"))
+    ledger = PredictionLedger()
     for i in range(7):
         ledger.record_prediction(_prediction_record(f"KXBTC15M-{i}", ts=1794873600.0 + i))
 
@@ -792,7 +791,7 @@ async def test_settlement_reconciliation_is_bounded_to_five_and_three_concurrent
 async def test_settlement_reconciliation_rotates_past_unsettled_oldest_batch(tmp_path, monkeypatch):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "settlement-rotation.db"))
+    ledger = PredictionLedger()
     tickers = [f"KXBTC15M-ROTATE-{i}" for i in range(7)]
     for i, ticker in enumerate(tickers):
         ledger.record_prediction(_prediction_record(ticker, ts=1794873600.0 + i))
@@ -824,7 +823,7 @@ async def test_settlement_scheduler_runs_even_without_prediction_snapshots(tmp_p
     from app.orchestrator import PredictorOrchestrator
 
     orchestrator = PredictorOrchestrator(
-        MarketDataHub(), PredictionLedger(str(tmp_path / "settlement-no-spot.db"))
+        MarketDataHub(), PredictionLedger()
     )
     scheduled = []
 
@@ -915,7 +914,7 @@ def test_order_book_source_switch_allows_timestamp_offset():
 
 
 def test_execution_rechecks_actual_contract_expiration_not_snapshot_countdown(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "execution-expiry.db"))
+    ledger = PredictionLedger()
     now = time.time()
     stale_countdown = _contract(
         open_timestamp=now - 100.0,
@@ -933,7 +932,7 @@ def test_execution_rechecks_actual_contract_expiration_not_snapshot_countdown(tm
 
 
 def test_execution_rejects_nonfinite_model_probability(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "execution-probability.db"))
+    ledger = PredictionLedger()
     contract = _contract()
     manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
     bad_probability = _decision(up=float("nan"), down=0.05)
@@ -947,7 +946,7 @@ def test_execution_rejects_nonfinite_model_probability(tmp_path):
 
 
 def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "one-entry-per-contract.db"))
+    ledger = PredictionLedger()
     contract = _contract()
     manager = ExecutionManager(_fresh_execution_hub(contract), ledger)
 
@@ -966,7 +965,7 @@ def test_execution_does_not_reenter_contract_after_paper_trade_settlement(tmp_pa
 
 @pytest.mark.parametrize("stale_feed", ["spot", "kalshi"])
 def test_execution_refuses_stale_feed_independent_of_prediction(tmp_path, stale_feed):
-    ledger = PredictionLedger(str(tmp_path / f"execution-stale-{stale_feed}.db"))
+    ledger = PredictionLedger()
     contract = _contract()
     hub = _fresh_execution_hub(contract)
     if stale_feed == "spot":
@@ -988,7 +987,7 @@ async def test_prediction_loop_does_not_wait_for_settlement_worker(monkeypatch, 
     from types import SimpleNamespace
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "settlement-background.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
     original_sleep = asyncio.sleep
     cycles = {"count": 0}
@@ -1047,7 +1046,7 @@ def test_stale_spot_feed_degrades_prediction_and_recovers_on_fresh_trade(tmp_pat
     )
     hub.last_kalshi_ts = now
     orchestrator = PredictorOrchestrator(
-        hub, PredictionLedger(str(tmp_path / "spot-recovery.db"))
+        hub, PredictionLedger()
     )
 
     degraded = orchestrator.evaluate_once(now=now, record_to_db=False)
@@ -1075,7 +1074,7 @@ def test_stale_order_book_is_excluded_and_degrades_prediction(tmp_path):
     hub.asks = [(90011.0, 1.0)]
     hub.last_book_source = "BINANCE_SPOT"
     hub.last_book_ts = now - 30.0
-    orchestrator = PredictorOrchestrator(hub, PredictionLedger(str(tmp_path / "stale-book.db")))
+    orchestrator = PredictorOrchestrator(hub, PredictionLedger())
 
     snapshot = orchestrator.evaluate_once(now=now, record_to_db=False)
 
@@ -1095,7 +1094,7 @@ def test_coinbase_primary_trade_side_flag_is_not_coerced():
     assert hub._coinbase_is_buyer_maker("unknown") is None
 
 def test_official_prediction_lock_is_idempotent_per_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "one-lock-per-contract.db"))
+    ledger = PredictionLedger()
     first = ledger.record_prediction(_prediction_record("KXBTC15M-LOCK-ONCE", final=Signal.UP))
     duplicate = ledger.record_prediction(_prediction_record("KXBTC15M-LOCK-ONCE", final=Signal.DOWN, ts=1794873660.0))
 
@@ -1108,7 +1107,7 @@ def test_official_prediction_lock_is_idempotent_per_contract(tmp_path):
 
 
 def test_official_settlement_is_idempotent_and_does_not_regrade_lock(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "settle-once.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-SETTLE-ONCE", final=Signal.UP))
 
     first_update = ledger.settle_contract(
@@ -1148,7 +1147,7 @@ def test_contract_rollover_clears_previous_directional_confirmation_candidate(tm
     hub.last_kalshi_ts = now
 
     orchestrator = PredictorOrchestrator(
-        hub, PredictionLedger(str(tmp_path / "rollover-candidate.db"))
+        hub, PredictionLedger()
     )
     orchestrator.active_contract = _contract(
         ticker="KXBTC15M-ROLLOVER-OLD",
@@ -1179,7 +1178,7 @@ def test_directional_lock_requires_two_consecutive_matching_votes(monkeypatch, t
     hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
     hub.kalshi_contract = contract
     hub.last_kalshi_ts = now
-    ledger = PredictionLedger(str(tmp_path / "two-vote-lock.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(hub, ledger)
     monkeypatch.setattr(orchestrator.final_engine, "decide", lambda *a, **k: _decision(Signal.UP))
 
@@ -1214,7 +1213,7 @@ def test_wait_or_reversal_resets_directional_confirmation(monkeypatch, tmp_path,
     hub.ingest_book(now, [(90009.0, 2.0)], [(90011.0, 2.0)])
     hub.kalshi_contract = contract
     hub.last_kalshi_ts = now
-    ledger = PredictionLedger(str(tmp_path / f"reset-{votes[1].value}.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(hub, ledger)
     sequence = iter(votes)
     monkeypatch.setattr(
@@ -1231,7 +1230,7 @@ def test_wait_or_reversal_resets_directional_confirmation(monkeypatch, tmp_path,
     assert orchestrator._directional_lock_candidate_count == 1
 
 def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "brti-cohorts.db"))
+    ledger = PredictionLedger()
     base = dict(
         timestamp_iso="2026-11-18 00:00:00 UTC",
         epoch_ts=1795046400.0,
@@ -1317,7 +1316,7 @@ def test_official_lock_freezes_brtI_alignment_at_prediction_time(
         hub.brti_status = "LIVE"
         hub.official_brti_price = 90020.0 if brti_mode == "agree" else 89980.0
         hub.last_brti_ts = now
-    ledger = PredictionLedger(str(tmp_path / f"brti-lock-{brti_mode}.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(hub, ledger)
     monkeypatch.setattr(
         orchestrator.final_engine, "decide",
@@ -1368,7 +1367,7 @@ def test_brti_cohort_api_returns_settled_performance(monkeypatch):
 async def test_official_settlement_without_expiration_value_never_uses_current_spot(tmp_path, monkeypatch):
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(str(tmp_path / "missing-expiration-value.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-NO-EXPIRATION-VALUE", final=Signal.UP))
     hub = MarketDataHub()
     async def verified_without_price(_ticker):
@@ -1390,7 +1389,7 @@ async def test_official_settlement_without_expiration_value_never_uses_current_s
 
 
 def test_settlement_without_official_result_requires_a_valid_contract_price(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "reject-unverified-settlement.db"))
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-UNVERIFIED-SETTLEMENT"))
 
     assert ledger.settle_contract(
@@ -1409,7 +1408,7 @@ def test_settlement_without_official_result_requires_a_valid_contract_price(tmp_
 def test_verified_outcome_settles_paper_trade_without_prediction_lock(
     tmp_path, side, expected_pnl
 ):
-    ledger = PredictionLedger(str(tmp_path / f"trade-without-lock-{side}.db"))
+    ledger = PredictionLedger()
     ledger.record_trade(TradeRecord(
         mode="paper",
         contract_ticker="KXBTC15M-TRADE-WITHOUT-LOCK",
@@ -1444,7 +1443,7 @@ async def test_settlement_reconciler_discovers_open_trade_without_prediction_loc
     from app.orchestrator import PredictorOrchestrator
 
     ticker = "KXBTC15M-TRADE-ONLY-RECONCILE"
-    ledger = PredictionLedger(str(tmp_path / "trade-only-reconciliation.db"))
+    ledger = PredictionLedger()
     ledger.record_trade(TradeRecord(
         mode="paper",
         contract_ticker=ticker,
@@ -1497,7 +1496,7 @@ def test_order_book_source_mismatch_degrades_and_recovers_prediction(tmp_path):
     assert statuses["Order Book Depth"] == "SOURCE_MISMATCH"
 
     orchestrator = PredictorOrchestrator(
-        hub, PredictionLedger(str(tmp_path / "source-mismatch.db"))
+        hub, PredictionLedger()
     )
     degraded = orchestrator.evaluate_once(now=now, record_to_db=False)
     assert degraded.weakness.feed_degraded is True
@@ -1573,7 +1572,7 @@ def test_all_prediction_engines_disclose_stale_cached_spot_and_recover(tmp_path)
     # The cached price remains populated, but its source timestamp is stale.
     hub.last_spot_ts = now - settings.stale_feed_threshold_sec - 1.0
 
-    ledger = PredictionLedger(str(tmp_path / "stale-engine-inputs.db"))
+    ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(hub, ledger)
     stale = orchestrator.evaluate_once(now=now, record_to_db=True)
 
@@ -1660,7 +1659,7 @@ def test_regime_engine_receives_only_active_contract_bars(monkeypatch, tmp_path)
     ])
 
     orchestrator = PredictorOrchestrator(
-        hub, PredictionLedger(str(tmp_path / "contract-scoped-regime.db"))
+        hub, PredictionLedger()
     )
     captured = {}
     original = orchestrator.regime_engine.analyze
@@ -1679,7 +1678,7 @@ def test_regime_engine_receives_only_active_contract_bars(monkeypatch, tmp_path)
 
 @pytest.mark.parametrize("book_failure", ["missing", "stale", "source_mismatch"])
 def test_execution_refuses_missing_stale_or_misaligned_spot_book(tmp_path, book_failure):
-    ledger = PredictionLedger(str(tmp_path / f"execution-book-{book_failure}.db"))
+    ledger = PredictionLedger()
     contract = _contract()
     hub = _fresh_execution_hub(contract)
     if book_failure == "missing":
@@ -1699,7 +1698,7 @@ def test_execution_refuses_missing_stale_or_misaligned_spot_book(tmp_path, book_
 
 
 def test_execution_rejects_delayed_snapshot_after_contract_rollover(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "execution-rollover-stale-snapshot.db"))
+    ledger = PredictionLedger()
     old_contract = _contract(ticker="KXBTC15M-OLD")
     new_contract = _contract(
         ticker="KXBTC15M-NEW",
@@ -1718,7 +1717,7 @@ def test_execution_rejects_delayed_snapshot_after_contract_rollover(tmp_path):
 
 
 def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "execution-live-quote.db"))
+    ledger = PredictionLedger()
     snapshot_contract = _contract(yes_ask_dollars=0.80)
     live_contract = _contract(
         yes_ask_dollars=0.20,
@@ -1739,7 +1738,7 @@ def test_execution_uses_latest_live_kalshi_ask_not_snapshot_quote(tmp_path):
 
 def test_database_reopen_preserves_predictions_trades_and_scoreboard(tmp_path):
     db_path = str(tmp_path / "restart-persistence.db")
-    first = PredictionLedger(db_path)
+    first = PredictionLedger()
     ticker = "KXBTC15M-RESTART-PERSISTENCE"
     first.record_prediction(_prediction_record(ticker, final=Signal.UP))
     first.record_trade(TradeRecord(
@@ -1754,7 +1753,7 @@ def test_database_reopen_preserves_predictions_trades_and_scoreboard(tmp_path):
         official_result="UP", settlement_source="KALSHI_VERIFIED",
     )
 
-    reopened = PredictionLedger(db_path)
+    reopened = PredictionLedger()
     scoreboard = reopened.get_scoreboard()
     predictions = reopened.get_recent_predictions(limit=5)
     trades = reopened.get_recent_trades(limit=5)
@@ -1773,7 +1772,7 @@ def test_database_reopen_preserves_predictions_trades_and_scoreboard(tmp_path):
 
 def test_concurrent_prediction_writes_keep_one_official_lock(tmp_path):
     db_path = str(tmp_path / "concurrent-locks.db")
-    ledger = PredictionLedger(db_path)
+    ledger = PredictionLedger()
     record = _prediction_record("KXBTC15M-CONCURRENT-LOCK")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -1787,7 +1786,7 @@ def test_concurrent_prediction_writes_keep_one_official_lock(tmp_path):
 def test_concurrent_settlement_is_idempotent_and_does_not_double_pnl(tmp_path):
     db_path = str(tmp_path / "concurrent-settlement.db")
     ticker = "KXBTC15M-CONCURRENT-SETTLEMENT"
-    ledger = PredictionLedger(db_path)
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record(ticker, final=Signal.UP))
     ledger.record_trade(TradeRecord(
         mode="paper", contract_ticker=ticker,
@@ -1806,7 +1805,7 @@ def test_concurrent_settlement_is_idempotent_and_does_not_double_pnl(tmp_path):
     with ThreadPoolExecutor(max_workers=6) as pool:
         list(pool.map(settle, range(12)))
 
-    reopened = PredictionLedger(db_path)
+    reopened = PredictionLedger()
     assert reopened.get_scoreboard().total_settled == 1
     trades = reopened.get_recent_trades(limit=5)
     assert len(trades) == 1
@@ -1814,156 +1813,61 @@ def test_concurrent_settlement_is_idempotent_and_does_not_double_pnl(tmp_path):
     assert trades[0].pnl_usd == pytest.approx(0.79)
 
 
-def test_legacy_database_migration_preserves_existing_prediction_and_trade(tmp_path):
-    db_path = tmp_path / "legacy-schema.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript("""
-        CREATE TABLE predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            contract_ticker TEXT NOT NULL,
-            timestamp_iso TEXT NOT NULL,
-            epoch_ts REAL NOT NULL,
-            strike_price REAL NOT NULL,
-            btc_price_at_pred REAL NOT NULL,
-            seconds_remaining REAL NOT NULL,
-            main_signal TEXT NOT NULL,
-            early_signal TEXT NOT NULL,
-            final_signal TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            up_prob REAL NOT NULL,
-            down_prob REAL NOT NULL,
-            regime TEXT NOT NULL,
-            settled INTEGER NOT NULL DEFAULT 0,
-            settlement_source TEXT,
-            settlement_price REAL,
-            actual_outcome TEXT,
-            final_won INTEGER,
-            main_won INTEGER,
-            early_won INTEGER
-        );
-        CREATE TABLE trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mode TEXT NOT NULL,
-            contract_ticker TEXT NOT NULL,
-            timestamp_iso TEXT NOT NULL,
-            side TEXT NOT NULL,
-            contracts INTEGER NOT NULL,
-            entry_price REAL NOT NULL,
-            quote_source TEXT NOT NULL DEFAULT 'KALSHI_LIVE_BOOK',
-            fee_paid REAL NOT NULL,
-            fair_prob_at_entry REAL NOT NULL,
-            net_edge REAL NOT NULL,
-            status TEXT NOT NULL,
-            pnl_usd REAL NOT NULL DEFAULT 0.0,
-            notes TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE multi_exchange_reference (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            epoch_ts REAL NOT NULL,
-            contract_ticker TEXT NOT NULL,
-            strike_price REAL,
-            primary_spot_price REAL,
-            official_brti_price REAL,
-            reference_price REAL,
-            reference_status TEXT NOT NULL,
-            usd_venue_count INTEGER NOT NULL DEFAULT 0,
-            included_venues_json TEXT NOT NULL DEFAULT '[]',
-            outlier_venues_json TEXT NOT NULL DEFAULT '[]',
-            venues_json TEXT NOT NULL DEFAULT '[]',
-            bid_depth_25bps REAL,
-            ask_depth_25bps REAL,
-            imbalance REAL,
-            ref_vs_primary_bps REAL,
-            ref_vs_brti_bps REAL,
-            primary_vs_brti_bps REAL
-        );
-        INSERT INTO predictions (
-            contract_ticker, timestamp_iso, epoch_ts, strike_price,
-            btc_price_at_pred, seconds_remaining, main_signal, early_signal,
-            final_signal, confidence, up_prob, down_prob, regime
-        ) VALUES (
-            'KXBTC15M-LEGACY-ROW', '2026-11-17 00:00:00 UTC', 1794873600.0,
-            90000.0, 90010.0, 500.0, 'UP', 'DOWN', 'UP', 70.0, 0.7, 0.3, 'STABLE MARKET'
-        );
-        INSERT INTO trades (
-            mode, contract_ticker, timestamp_iso, side, contracts, entry_price,
-            fee_paid, fair_prob_at_entry, net_edge, status
-        ) VALUES (
-            'paper', 'KXBTC15M-LEGACY-ROW', '2026-11-17 00:00:00 UTC',
-            'YES', 1, 0.2, 0.01, 0.7, 0.49, 'OPEN'
-        );
-    """)
-    conn.commit()
-    conn.close()
+def test_postgres_schema_initialization_is_idempotent_and_preserves_records():
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-SCHEMA-IDEMPOTENT"
+    ledger.record_prediction(_prediction_record(ticker))
+    before = ledger.get_recent_predictions(limit=5)
 
-    migrated = PredictionLedger(str(db_path))
-    predictions = migrated.get_recent_predictions(limit=5)
-    trades = migrated.get_recent_trades(limit=5)
-    with migrated._connection() as check:
-        prediction_columns = {
-            row["name"] for row in check.execute("PRAGMA table_info(predictions)")
-        }
-        trade_columns = {
-            row["name"] for row in check.execute("PRAGMA table_info(trades)")
-        }
-        reference_columns = {
-            row["name"] for row in check.execute("PRAGMA table_info(multi_exchange_reference)")
-        }
+    ledger._init_db()
 
-    assert len(predictions) == 1
-    assert predictions[0].contract_ticker == "KXBTC15M-LEGACY-ROW"
-    assert predictions[0].is_official_lock is True
-    assert len(trades) == 1
-    assert trades[0].status == "OPEN"
-    assert "settled_at" in trade_columns
-    assert {"brti_cohort", "brti_side_at_lock", "spot_side_at_lock"} <= prediction_columns
-    assert {
-        "primary_spot_age_seconds", "official_brti_age_seconds",
-        "reference_vs_strike_bps",
-    } <= reference_columns
+    after = ledger.get_recent_predictions(limit=5)
+    assert len(before) == len(after) == 1
+    assert after[0].contract_ticker == ticker
 
 
-def test_database_creates_missing_parent_without_falling_back_to_memory(tmp_path):
-    missing_parent_db = tmp_path / "missing-volume" / "satsignal.db"
-    ledger = PredictionLedger(str(missing_parent_db))
+def test_database_storage_is_supabase_postgres_only():
+    ledger = PredictionLedger()
+    health = ledger.get_storage_health()
 
-    assert missing_parent_db.is_file()
-    assert ledger.get_storage_health()["storage_type"] == "FILE"
-    assert ledger.get_storage_health()["status"] == "HEALTHY"
+    assert ledger.database_url
+    assert not hasattr(ledger, "db_path")
+    assert health["status"] == "HEALTHY"
+    assert health["storage_type"] == "POSTGRESQL"
+    assert health["provider"] == "SUPABASE"
 
 
-def test_storage_health_reports_file_integrity_and_saved_record_counts(tmp_path):
-    db_path = str(tmp_path / "storage-health.db")
-    ledger = PredictionLedger(db_path)
+def test_storage_health_reports_saved_postgres_record_counts():
+    ledger = PredictionLedger()
     ledger.record_prediction(_prediction_record("KXBTC15M-STORAGE-HEALTH"))
 
     health = ledger.get_storage_health()
 
     assert health["status"] == "HEALTHY"
-    assert health["storage_type"] == "FILE"
-    assert health["database_file_exists"] is True
-    assert health["database_size_bytes"] > 0
-    assert health["journal_mode"] == "WAL"
-    assert health["integrity_check"] == "ok"
+    assert health["storage_type"] == "POSTGRESQL"
+    assert health["connection_check"] == "ok"
+    assert health["integrity_check"] == "not_applicable"
     assert health["record_counts"]["predictions"] == 1
     assert health["record_counts"]["trades"] == 0
 
 
-def test_storage_health_reports_corruption_or_unavailable_database_without_crashing(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "storage-health-error.db"))
-    ledger.db_path = str(tmp_path / "missing" / "database.db")
+def test_storage_health_reports_unavailable_postgres_without_crashing():
+    ledger = PredictionLedger()
+    ledger.database_url = "postgresql://invalid.invalid:1/no_such_database?connect_timeout=1&sslmode=require"
 
     health = ledger.get_storage_health()
 
     assert health["status"] == "UNAVAILABLE"
+    assert health["storage_type"] == "POSTGRESQL"
     assert health["integrity_check"] == "ERROR"
+    assert health["connection_check"] == "failed"
     assert health["error_type"] == "OperationalError"
 
 
 @pytest.mark.parametrize(
     ("storage_status", "integrity", "error_type"),
     [
-        ("HEALTHY", "ok", None),
+        ("HEALTHY", "not_applicable", None),
         ("UNAVAILABLE", "ERROR", "OperationalError"),
     ],
 )
@@ -1975,7 +1879,7 @@ def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
     main_module = importlib.import_module("app.main")
     storage = {
         "status": storage_status,
-        "storage_type": "FILE",
+        "storage_type": "POSTGRESQL",
         "integrity_check": integrity,
     }
     if error_type:
