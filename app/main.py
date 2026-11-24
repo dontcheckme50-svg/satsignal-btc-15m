@@ -568,30 +568,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       connectWS();
     }, delay);
   }
-  document.getElementById("forecast-lock-button").addEventListener("click", async () => {
-    const button = document.getElementById("forecast-lock-button");
-    const note = document.getElementById("forecast-lock-note");
-    if (button.disabled) return;
-    button.disabled = true;
-    button.textContent = "Locking forecast…";
-    note.textContent = "Submitting the Engine F lock for the active official contract…";
-    try {
-      const response = await fetch("/api/forecast/lock", {
-        method: "POST",
-        headers: { "Accept": "application/json" },
-        cache: "no-store"
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) {
-        throw new Error(result.detail || `Lock request failed (${response.status})`);
-      }
-      note.textContent = `Locked ${result.lock.signal} for ${result.lock.contract_ticker} at ${result.lock.timestamp_iso}.`;
-      await fetchInitial();
-    } catch(err) {
-      note.textContent = err.message || "Lock request failed. Check connection and try again.";
-      await fetchInitial();
-    }
-  });
+
   fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); fetchStorageHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500); setInterval(fetchStorageHealth, 5000);
 </script>
 </body>
