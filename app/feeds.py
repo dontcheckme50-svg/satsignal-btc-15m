@@ -61,16 +61,26 @@ class MarketDataHub:
             return None
         try:
             pem_bytes = None
-            if settings.kalshi_private_key:
-                pem_bytes = settings.kalshi_private_key.replace("\\n", "\n").encode("utf-8")
-            elif settings.kalshi_private_key_path:
-                with open(settings.kalshi_private_key_path, "rb") as f:
-                    pem_bytes = f.read()
+            # Prefer an explicitly configured file path. For backward compatibility,
+            # KALSHI_PRIVATE_KEY may also contain a mounted PEM file path (the
+            # existing Hostless setup), or inline PEM contents.
+            configured_path = settings.kalshi_private_key_path
+            key_value = settings.kalshi_private_key
+            if configured_path:
+                with open(configured_path, "rb") as key_file:
+                    pem_bytes = key_file.read()
+            elif key_value:
+                normalized = key_value.replace("\\n", "\n")
+                if "-----BEGIN " in normalized:
+                    pem_bytes = normalized.encode("utf-8")
+                else:
+                    with open(normalized, "rb") as key_file:
+                        pem_bytes = key_file.read()
             else:
                 self.brti_detail = "Private key missing: configure KALSHI_PRIVATE_KEY_PATH or KALSHI_PRIVATE_KEY"
                 return None
             if not pem_bytes or b"-----BEGIN " not in pem_bytes:
-                self.brti_detail = "Private key format invalid: expected PEM contents"
+                self.brti_detail = "Private key format invalid: expected PEM contents or a path to a PEM file"
                 return None
             return serialization.load_pem_private_key(pem_bytes, password=None)
         except Exception as e:
