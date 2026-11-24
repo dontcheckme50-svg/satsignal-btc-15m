@@ -1,4 +1,5 @@
 from app.engines import EarlyPredictionEngine, ForecastEngine
+from app.database import PredictionLedger
 from app.models import (
     ContractInfo, EarlyPredictionReport, EvidenceMetrics, Signal, WeaknessReport,
 )
@@ -147,3 +148,24 @@ def test_engine_f_degraded_inputs_force_wait():
     )
 
     assert report.signal == Signal.WAIT
+
+
+def test_manual_forecast_lock_is_immutable_per_contract(tmp_path):
+    ledger = PredictionLedger(str(tmp_path / "forecast-lock.db"))
+    original = {
+        "contract_ticker": "KXBTC15M-FORECAST",
+        "timestamp_iso": "2027-01-01 00:05:00 UTC",
+        "epoch_ts": 300.0,
+        "signal": "UP",
+        "confidence": 72.0,
+        "up_prob": 0.72,
+        "down_prob": 0.28,
+        "strike_price": 100000.0,
+        "btc_price_at_lock": 100010.0,
+    }
+    first = ledger.record_forecast_lock(original)
+    second = ledger.record_forecast_lock({**original, "signal": "DOWN", "confidence": 81.0})
+
+    assert first["signal"] == "UP"
+    assert second["signal"] == "UP"
+    assert ledger.get_forecast_lock("KXBTC15M-FORECAST")["confidence"] == 72.0
