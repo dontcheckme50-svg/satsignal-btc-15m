@@ -1,28 +1,40 @@
 # SATSIGNAL BTC 15M — Hostless deployment checklist
 
-This project is a Dockerized FastAPI app. Hostless supports Git-connected apps built from a Dockerfile. The app must bind to `0.0.0.0`, listen on `PORT`, and expose a successful health endpoint.
+This project is a Dockerized FastAPI app. Hostless should build the repository with its Dockerfile, bind to `0.0.0.0`, listen on `PORT`, and use `/api/health` as the health-check path.
 
-## Free-first deployment
+## Supabase is the only persistence backend
 
-1. Push this project to a **new private Git repository**. Do not upload `.env`, private keys, or database files.
-2. In Hostless, create an App from that repository and select Docker as the build system.
-3. Use the repository root as the working directory and `Dockerfile` as the Dockerfile path.
-4. Set the health-check path to `/api/health`.
-5. Keep the app at one replica and paper-only mode. This release hardcodes `trading_mode = "paper"` and has no live/demo order-submission path.
-6. Do **not** create or attach a paid volume or resize beyond the account's free entitlement. Review the current resource estimate before confirming creation or deployment.
-7. The current release uses SQLite. Without persistent storage, prediction history, trade history, and scoreboard records may be lost when the container is replaced. Do not assume the container filesystem is durable. For durable cloud history, use an included/free managed database allowance only after confirming the exact cost in the Hostless UI and migrating the app database deliberately. A new volume can incur charges.
-8. Deploy and verify:
-   - `/api/health` returns `status: ok` and `trading_mode: paper`
-   - `/` displays the dashboard
-   - `/api/feeds` shows feed health
-   - `/api/scoreboard` returns totals, pending counts, and per-engine results
-   - `/api/history` and `/api/trades` return records
-9. Do not treat HTTP 200 or a dashboard snapshot as proof that the official market contract is valid. Confirm the ticker begins `KXBTC15M`, strike source is `KALSHI_OFFICIAL`, and contract close time is in the future.
-10. Let it collect verified settlements and paper observations before evaluating predictive performance. No profitability claim is made.
+1. Confirm the correct Supabase project for the new `dontcheckme50-svg/satsignal-btc-15m` Hostless service.
+2. In Supabase, open **Connect** and copy the PostgreSQL connection string. Use a connection type supported by Hostless (prefer the session pooler if direct connectivity is restricted) and require TLS with `sslmode=require`.
+3. In Hostless, add `DATABASE_URL` as a private secret environment variable. Do not place the connection string in GitHub, source files, build logs, or chat.
+4. Keep `TRADING_MODE=paper`. This release does not enable live order submission.
+5. No Hostless disk volume is needed for prediction history, scoreboard, trade records, observations, or multi-exchange history. Those records are stored in Supabase PostgreSQL.
+6. Deploy the new branch only after its pull request checks pass. Do not change the old Rudy1128 Hostless app.
+
+## Deployment verification
+
+After deployment, verify:
+
+- `/api/health` returns HTTP 200, `trading_mode: paper`, and storage status `HEALTHY`.
+- `/api/storage/health` reports `storage_type: POSTGRESQL`, `provider: SUPABASE`, and `connection_check: ok`.
+- `/` loads the full dashboard.
+- `/api/feeds` reports feed status.
+- `/api/scoreboard`, `/api/history`, `/api/prediction-observations`, `/api/trades`, and `/api/multi-exchange/history` return valid responses.
+- The active contract ticker begins with `KXBTC15M`, its strike source is `KALSHI_OFFICIAL`, and its close time is in the future.
+
+A successful process health response by itself is not proof that a valid official market contract or fresh feeds are active. Verify those separately.
+
+## Test database and CI
+
+- GitHub Actions uses a temporary PostgreSQL service for regression and storage integration tests.
+- Local test runs must set `TEST_DATABASE_URL` to a disposable PostgreSQL/Supabase test database. Test setup overrides `DATABASE_URL` with that value and clears only the SATSIGNAL test tables before each test.
+- Never set `TEST_DATABASE_URL` to the production project.
+- The production Hostless app uses `DATABASE_URL` and is not affected by test database cleanup.
 
 ## Data integrity notes
 
 - Prediction records are scored only after the official Kalshi settlement fetch verifies the contract outcome.
 - WAIT signals are excluded from directional win-rate denominators and shown separately.
 - Paper-trade P&L is separate from prediction accuracy.
-- CF Benchmarks BRTI remains unavailable unless the required entitlement is configured; it is not silently replaced by Binance spot.
+- Official CF Benchmarks BRTI is never substituted with Binance spot. Missing entitlement leaves the BRTI component inactive.
+- The five prediction engines and the separate multi-exchange shadow feed remain independent as documented in the README.
