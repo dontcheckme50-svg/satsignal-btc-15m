@@ -19,7 +19,8 @@ After deployment, verify:
 - `/api/storage/health` reports `storage_type: POSTGRESQL`, `provider: SUPABASE`, and `connection_check: ok`.
 - `/` loads the full dashboard.
 - `/api/feeds` reports feed status.
-- `/api/scoreboard`, `/api/history`, `/api/prediction-observations`, `/api/trades`, and `/api/multi-exchange/history` return valid responses.
+- `/api/scoreboard`, `/api/history`, `/api/prediction-observations`, `/api/forecast`, `/api/trades`, and `/api/multi-exchange/history` return valid responses.
+- Engine F appears as a separate dashboard card; its manual lock is stored independently in Supabase and does not alter Engine E or place trades.
 - The active contract ticker begins with `KXBTC15M`, its strike source is `KALSHI_OFFICIAL`, and its close time is in the future.
 
 A successful process health response by itself is not proof that a valid official market contract or fresh feeds are active. Verify those separately.

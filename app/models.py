@@ -91,12 +91,25 @@ class FinalDecisionReport(BaseModel):
     agreement_details: List[str] = Field(default_factory=list)
     rationale: str
 
+class ForecastReport(BaseModel):
+    signal: Signal = Signal.WAIT
+    confidence: float = 0.0
+    up_probability: float = 0.5
+    down_probability: float = 0.5
+    rationale: str = "Forecast engine warming up"
+    locked: bool = False
+    locked_signal: Optional[Signal] = None
+    locked_at_iso: Optional[str] = None
+    lock_ticker: Optional[str] = None
+
+
 class EngineStatusSummary(BaseModel):
     engine_a_evidence: dict
     engine_b_weakness: dict
     engine_c_regime: dict
     engine_d_early: dict
     engine_e_final: dict
+    engine_f_forecast: dict = Field(default_factory=dict)
 
 class PredictionRecord(BaseModel):
     id: Optional[int] = None
@@ -175,6 +188,7 @@ class DashboardSnapshot(BaseModel):
     early: EarlyPredictionReport
     final: FinalDecisionReport
     engines: EngineStatusSummary
+    forecast: ForecastReport = Field(default_factory=ForecastReport)
     scoreboard: Scoreboard
     recent_predictions: List[PredictionRecord]
     recent_trades: List[TradeRecord]
