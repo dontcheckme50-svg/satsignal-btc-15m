@@ -29,15 +29,15 @@ The five-engine architecture is preserved. Reliability work hardens evidence inp
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:TRADING_MODE = "paper"
-$env:PREDICTOR_DB_PATH = "$PWD\satsignal_btc15m.db"
+$env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:PORT/postgres?sslmode=require"
 .\.venv\Scripts\python.exe -m app.main
 ```
 
-Open `http://localhost:8000`. API docs: `/docs`; process health (including storage status): `/api/health`; detailed SQLite integrity and record counts: `/api/storage/health`; scoreboard: `/api/scoreboard`.
+Open `http://localhost:8000`. API docs: `/docs`; process health (including storage status): `/api/health`; detailed PostgreSQL connection health and record counts: `/api/storage/health`; scoreboard: `/api/scoreboard`.
 
 ## Deployment and persistence
 
-Build with the included Dockerfile. Set `TRADING_MODE=paper` and set `PREDICTOR_DB_PATH` to a mounted persistent volume path if the host provides one. A container's ephemeral filesystem may be wiped on restart; do not assume the scoreboard/history will survive without persistent storage. The included `render.yaml` currently points SQLite at `/data` but does not provision a persistent disk, so that blueprint alone does not guarantee restart persistence. Confirm a persistent volume is actually mounted before relying on saved scoreboard/history. Do not activate paid storage without explicit approval.
+Supabase PostgreSQL is the only supported persistence backend. Set `DATABASE_URL` as a private hosting secret using the Supabase PostgreSQL connection string with TLS enabled (`sslmode=require`). Startup fails clearly when it is missing or cannot connect; the app never creates a local file database or in-memory substitute. No Hostless disk volume is required for ledger persistence.
 
 ## Feeds
 
@@ -62,7 +62,7 @@ The shadow feed does not affect predictions or execution. It is visible on the d
 
 - `/api/multi-exchange` — current venue/reference snapshot and comparison versus primary spot, official BRTI (when fresh), and strike.
 - `/api/multi-exchange/history` — persisted observations.
-- Shadow observations are recorded to SQLite every five seconds while the orchestrator is evaluating and a primary spot price is available. Source ages are stored; stale spot/BRTI values are excluded from comparisons.
+- Shadow observations are recorded to Supabase PostgreSQL every five seconds while the orchestrator is evaluating and a primary spot price is available. Source ages are stored; stale spot/BRTI values are excluded from comparisons.
 
 ## Reliability safeguards
 
@@ -78,7 +78,11 @@ The shadow feed does not affect predictions or execution. It is visible on the d
 
 ## Tests
 
+Tests require `TEST_DATABASE_URL` to point to a dedicated disposable PostgreSQL test database. The test bootstrap routes the suite to this URL and clears only the four SATSIGNAL test tables before each test. Never point it at the production Supabase database.
+
+
 ```powershell
+$env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@TEST-HOST:PORT/postgres?sslmode=require"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
