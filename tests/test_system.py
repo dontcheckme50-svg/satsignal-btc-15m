@@ -147,6 +147,7 @@ def test_http_dashboard_and_health_endpoints():
     assert "forecastLockPending = false;" in dashboard
     assert "finally {" in dashboard
     assert "button.disabled = !forecastLockReady;" in dashboard
+    assert 'forecastLockReady = false;\n      button.disabled = true;\n      note.textContent = "Forecast locked for this contract.' in dashboard
     assert 'fetchOrchestratorHealth' in dashboard
     assert client.get("/docs").status_code == 200
     health = client.get("/api/health")
