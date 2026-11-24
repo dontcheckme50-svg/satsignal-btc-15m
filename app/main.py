@@ -401,6 +401,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div>
         <div class="kv"><span>Prediction Records</span><span id="storage-predictions">--</span></div>
         <div class="kv"><span>Radar Observations</span><span id="storage-observations">--</span></div>
+        <div class="kv"><span>Engine F Locks</span><span id="storage-forecast-locks">--</span></div>
         <div class="kv"><span>Paper Trades / Exchange</span><span id="storage-trades-exchange">--</span></div>
       </div>
     </div>
@@ -634,6 +635,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       set("storage-size", h.database_size_bytes != null ? (Number(h.database_size_bytes)/1048576).toFixed(2)+" MB" : "--");
       set("storage-predictions", counts.predictions ?? 0);
       set("storage-observations", counts.prediction_observations ?? 0);
+      set("storage-forecast-locks", counts.forecast_locks ?? 0);
       set("storage-trades-exchange", (counts.trades ?? 0)+" / "+(counts.multi_exchange_reference ?? 0));
       document.getElementById("storage-note").textContent = h.provider === "SUPABASE" && h.connection_check === "ok"
         ? "Supabase PostgreSQL is active. Connection and ledger record counts are verified."
