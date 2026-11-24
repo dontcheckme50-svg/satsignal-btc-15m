@@ -1,6 +1,6 @@
-"""Narrow PostgreSQL adapter for the SQL surface used by PredictionLedger."""
+"""Small PostgreSQL connection adapter for the prediction ledger."""
 from __future__ import annotations
-import re
+
 import psycopg
 from psycopg.rows import dict_row
 
@@ -27,35 +27,16 @@ class CursorAdapter:
 
 
 class ConnectionAdapter:
+    """Translate the ledger's qmark bind markers and expose insert IDs explicitly."""
+
     def __init__(self, connection):
         self._connection = connection
 
     def execute(self, sql, params=()):
         raw = sql.strip()
-        upper = raw.upper()
-        if upper.startswith("PRAGMA TABLE_INFO("):
-            match = re.search(r"PRAGMA\s+table_info\(([^)]+)\)", raw, re.I)
-            table = match.group(1).strip("'\"")
-            cursor = self._connection.execute(
-                """SELECT column_name AS name FROM information_schema.columns
-                   WHERE table_schema = current_schema() AND table_name = %s
-                   ORDER BY ordinal_position""", (table,)
-            )
-            return CursorAdapter(cursor)
-        if upper.startswith("PRAGMA JOURNAL_MODE"):
-            return CursorAdapter(self._connection.execute("SELECT 'POSTGRESQL' AS journal_mode"))
-        if upper.startswith("PRAGMA QUICK_CHECK"):
-            return CursorAdapter(self._connection.execute("SELECT 'not_applicable' AS integrity"))
-        if upper.startswith("BEGIN IMMEDIATE"):
-            raw = "SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))"
-        raw = raw.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
-        # psycopg treats literal percent signs (including SQL LIKE wildcards)
-        # as placeholder syntax. Escape them before translating ? parameters.
-        raw = raw.replace("%", "%%")
-        raw = raw.replace("?", "%s")
-        if raw.upper().startswith("INSERT OR IGNORE INTO"):
-            raw = re.sub(r"^INSERT OR IGNORE INTO", "INSERT INTO", raw, flags=re.I)
-            raw += " ON CONFLICT DO NOTHING"
+        # psycopg reserves percent signs for placeholders. Escape literal LIKE
+        # wildcards before translating the ledger's qmark parameters.
+        raw = raw.replace("%", "%%").replace("?", "%s")
         is_insert = raw.upper().startswith("INSERT INTO")
         if is_insert and " RETURNING " not in raw.upper():
             raw += " RETURNING id"
@@ -83,6 +64,7 @@ class ConnectionAdapter:
 
 
 def connect(database_url: str) -> ConnectionAdapter:
+    """Connect to Supabase PostgreSQL with TLS required by default."""
     if "sslmode=" not in database_url:
         separator = "&" if "?" in database_url else "?"
         database_url += separator + "sslmode=require"
