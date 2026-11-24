@@ -330,6 +330,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("countdown").textContent = fmtClock(remaining);
     document.getElementById("cp-countdown").textContent = fmtClock(checkpointRemaining);
   }
+  let forecastLockPending = false;
+  let forecastLockReady = false;
   function updateUI(d) {
     if (!d || !d.contract) return;
     document.getElementById("server-time").textContent = d.server_time_iso;
@@ -372,7 +374,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : "NOT LOCKED";
     const forecastReady = Boolean(d.contract.is_official_kalshi && d.engines.engine_f_forecast?.input_health?.fresh
       && ["UP","DOWN"].includes(forecast.signal) && Number(d.contract.seconds_remaining) > 0 && !forecast.locked);
-    document.getElementById("forecast-lock-button").disabled = !forecastReady;
+    forecastLockReady = forecastReady;
+    document.getElementById("forecast-lock-button").disabled = !forecastReady || forecastLockPending;
     document.getElementById("forecast-lock-button").textContent = forecast.locked ? "Forecast Locked" : "Lock Engine F Forecast";
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
@@ -401,17 +404,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function lockEngineFForecast() {
     const button = document.getElementById("forecast-lock-button");
     const note = document.getElementById("forecast-lock-note");
-    if (button.disabled) return;
+    if (forecastLockPending || button.disabled) return;
+    forecastLockPending = true;
     button.disabled = true;
     note.textContent = "Locking current Engine F forecast...";
     try {
       const res = await fetch("/api/forecast/lock", {method:"POST", headers:{"Content-Type":"application/json"}});
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail || "Forecast lock was rejected");
+      forecastLockReady = false;
+      button.disabled = true;
       note.textContent = "Forecast locked for this contract. This is not a trade or Engine E lock.";
       await fetchInitial();
     } catch (err) {
       note.textContent = err.message || "Could not lock forecast.";
+    } finally {
+      forecastLockPending = false;
+      button.disabled = !forecastLockReady;
     }
   }
   document.getElementById("forecast-lock-button").addEventListener("click", lockEngineFForecast);
@@ -504,14 +513,72 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("storage-note").textContent = "Storage diagnostics could not be loaded. No storage settings were changed.";
     }
   }
-  async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
+  let wsReconnectDelay = 1000;
+  let wsReconnectTimer = null;
+  let wsFallbackTimer = null;
+  let activeSocket = null;
+  async function fetchInitial() {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      if (res.ok) updateUI(await res.json());
+    } catch(e) {}
+  }
+  function startStateFallback() {
+    if (wsFallbackTimer !== null) return;
+    wsFallbackTimer = setInterval(fetchInitial, 2000);
+  }
+  function stopStateFallback() {
+    if (wsFallbackTimer !== null) clearInterval(wsFallbackTimer);
+    wsFallbackTimer = null;
+  }
   function connectWS() {
     const wsEl = document.getElementById("ws-status");
-    const ws = new WebSocket(`${location.protocol==="https:"?"wss:":"ws:"}//${location.host}/ws`);
-    ws.onopen = () => { wsEl.textContent = "LIVE STREAM"; wsEl.style.color = "var(--up)"; };
-    ws.onmessage = (e) => updateUI(JSON.parse(e.data));
-    ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
+    if (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)) return;
+    let ws;
+    try {
+      ws = new WebSocket(`${location.protocol==="https:"?"wss:":"ws:"}//${location.host}/ws`);
+      activeSocket = ws;
+    } catch(e) {
+      wsEl.textContent = "POLLING · WS UNAVAILABLE";
+      wsEl.style.color = "var(--wait)";
+      startStateFallback();
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      if (activeSocket !== ws) return;
+      wsReconnectDelay = 1000;
+      if (wsReconnectTimer !== null) clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = null;
+      stopStateFallback();
+      wsEl.textContent = "LIVE STREAM";
+      wsEl.style.color = "var(--up)";
+    };
+    ws.onmessage = (e) => {
+      if (activeSocket !== ws) return;
+      try { updateUI(JSON.parse(e.data)); }
+      catch(err) { console.warn("Ignoring malformed WebSocket update", err); }
+    };
+    ws.onerror = () => { try { ws.close(); } catch(e) {} };
+    ws.onclose = () => {
+      if (activeSocket !== ws) return;
+      activeSocket = null;
+      wsEl.textContent = "POLLING · RECONNECTING";
+      wsEl.style.color = "var(--wait)";
+      startStateFallback();
+      scheduleReconnect();
+    };
   }
+  function scheduleReconnect() {
+    if (wsReconnectTimer !== null) return;
+    const delay = wsReconnectDelay;
+    wsReconnectDelay = Math.min(30000, Math.round(wsReconnectDelay * 1.8));
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      connectWS();
+    }, delay);
+  }
+
   fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); fetchStorageHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500); setInterval(fetchStorageHealth, 5000);
 </script>
 </body>
