@@ -2,7 +2,7 @@ import asyncio, time
 from contextlib import asynccontextmanager
 from typing import Optional, Set
 import uvicorn
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from app.config import settings, storage_mount_status, persistent_storage_required
 from app.database import PredictionLedger
@@ -90,6 +90,25 @@ async def get_engines():
     if orchestrator.latest_snapshot is None: return {"status": "warming_up"}
     s = orchestrator.latest_snapshot
     return {"summary": s.engines.model_dump(), "evidence": s.evidence.model_dump(), "weakness": s.weakness.model_dump(), "regime": s.regime.model_dump(), "early": s.early.model_dump(), "final": s.final.model_dump()}
+
+@app.get("/api/forecast")
+async def get_forecast():
+    if orchestrator.latest_snapshot is None:
+        return {"status": "warming_up", "forecast": None}
+    snap = orchestrator.latest_snapshot
+    return {
+        "contract_ticker": snap.contract.ticker,
+        "forecast": snap.forecast.model_dump(),
+        "engine_status": snap.engines.engine_f_forecast,
+    }
+
+@app.post("/api/forecast/lock")
+async def lock_forecast():
+    try:
+        row = orchestrator.lock_forecast()
+        return {"ok": True, "lock": row, "forecast": orchestrator.latest_snapshot.forecast.model_dump()}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 @app.get("/api/market")
 async def get_market():
@@ -213,6 +232,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine E (Final)</span><span id="eng-e">--</span></div>
       <div class="rationale" id="engine-notes"></div>
     </div>
+    <div class="card" id="engine-f-card">
+      <h3>Engine F — Independent Forecast</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span id="forecast-badge" class="badge sig-WAIT">WAIT</span>
+        <span id="forecast-conf" class="big-val">50.0%</span>
+      </div>
+      <div class="kv"><span>UP probability</span><span id="forecast-up">50.0%</span></div>
+      <div class="kv"><span>DOWN probability</span><span id="forecast-down">50.0%</span></div>
+      <div class="rationale" id="forecast-rationale">Waiting for live inputs.</div>
+      <div class="kv"><span>Forecast lock</span><span id="forecast-lock-status">NOT LOCKED</span></div>
+      <button id="forecast-lock-button" type="button" disabled style="width:100%;margin-top:12px;padding:11px;border:1px solid #38bdf8;border-radius:8px;background:#0c4a6e;color:#e0f2fe;font-weight:800;cursor:pointer;">Lock Engine F Forecast</button>
+      <div class="rationale" id="forecast-lock-note">Manual Engine F lock is separate from Engine E and does not place a trade.</div>
+    </div>
     <div class="card">
       <h3>Order Flow & Microstructure</h3>
       <div class="bar-wrap"><div class="bar-label"><span style="color:var(--up)">Buying Pressure</span><span id="buy-pct">50%</span></div><div class="bar-track"><div id="buy-bar" class="bar-fill-up" style="width:50%"></div></div></div>
@@ -327,6 +359,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%) · ${d.engines.engine_c_regime.status}`;
     document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}% · ${d.engines.engine_d_early.status}`;
     document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}% · ${d.engines.engine_e_final.status}`;
+    const forecast = d.forecast || {};
+    const forecastBadge = document.getElementById("forecast-badge");
+    forecastBadge.textContent = forecast.signal || "WAIT";
+    forecastBadge.className = `badge sig-${forecast.signal || "WAIT"}`;
+    document.getElementById("forecast-conf").textContent = `${Number(forecast.confidence || 0).toFixed(1)}%`;
+    document.getElementById("forecast-up").textContent = `${(Number(forecast.up_probability ?? 0.5)*100).toFixed(1)}%`;
+    document.getElementById("forecast-down").textContent = `${(Number(forecast.down_probability ?? 0.5)*100).toFixed(1)}%`;
+    document.getElementById("forecast-rationale").textContent = forecast.rationale || "Forecast warming up.";
+    document.getElementById("forecast-lock-status").textContent = forecast.locked
+      ? `LOCKED ${forecast.locked_signal || ""} · ${forecast.locked_at_iso || ""}`
+      : "NOT LOCKED";
+    const forecastReady = Boolean(d.contract.is_official_kalshi && d.engines.engine_f_forecast?.input_health?.fresh
+      && ["UP","DOWN"].includes(forecast.signal) && Number(d.contract.seconds_remaining) > 0 && !forecast.locked);
+    document.getElementById("forecast-lock-button").disabled = !forecastReady;
+    document.getElementById("forecast-lock-button").textContent = forecast.locked ? "Forecast Locked" : "Lock Engine F Forecast";
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
     document.getElementById("buy-bar").style.width = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-bar").style.width = `${d.evidence.selling_pressure_pct}%`;
@@ -351,6 +398,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td><span class="badge">LOCKED</span></td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
     }).join("");
   }
+  async function lockEngineFForecast() {
+    const button = document.getElementById("forecast-lock-button");
+    const note = document.getElementById("forecast-lock-note");
+    if (button.disabled) return;
+    button.disabled = true;
+    note.textContent = "Locking current Engine F forecast...";
+    try {
+      const res = await fetch("/api/forecast/lock", {method:"POST", headers:{"Content-Type":"application/json"}});
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || "Forecast lock was rejected");
+      note.textContent = "Forecast locked for this contract. This is not a trade or Engine E lock.";
+      await fetchInitial();
+    } catch (err) {
+      note.textContent = err.message || "Could not lock forecast.";
+    }
+  }
+  document.getElementById("forecast-lock-button").addEventListener("click", lockEngineFForecast);
   async function fetchMultiExchange() {
     try {
       const res = await fetch("/api/multi-exchange");
