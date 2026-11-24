@@ -33,7 +33,7 @@ $env:DATABASE_URL = "postgresql://USER:PASSWORD@HOST:PORT/postgres?sslmode=requi
 .\.venv\Scripts\python.exe -m app.main
 ```
 
-Open `http://localhost:8000`. API docs: `/docs`; health: `/api/health`; scoreboard: `/api/scoreboard`.
+Open `http://localhost:8000`. API docs: `/docs`; health: `/api/health`; scoreboard: `/api/scoreboard`. For persistence integration tests, set `TEST_DATABASE_URL` to a dedicated disposable Supabase test database before running `pytest`; tests never target the production `DATABASE_URL`.
 
 ## Deployment and persistence
 
