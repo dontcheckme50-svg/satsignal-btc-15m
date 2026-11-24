@@ -168,6 +168,44 @@ def test_postgres_schema_reinitialization_preserves_official_lock():
     assert ledger.get_scoreboard().total_predictions == 1
 
 
+def _final_report(signal: Signal) -> FinalDecisionReport:
+    return FinalDecisionReport(
+        signal=signal,
+        confidence=72.0 if signal != Signal.WAIT else 0.0,
+        up_probability=0.72 if signal == Signal.UP else 0.28 if signal == Signal.DOWN else 0.5,
+        down_probability=0.28 if signal == Signal.UP else 0.72 if signal == Signal.DOWN else 0.5,
+        agreement_status="TEST",
+        rationale="Deterministic lifecycle test",
+    )
+
+
+def _evaluate_sequence(orchestrator, hub, ticker, start, signals, remaining=500.0):
+    snapshots = []
+    close_ts = start + remaining
+    for offset, signal in enumerate(signals):
+        ts = start + offset
+        hub.kalshi_contract = ContractInfo(
+            ticker=ticker,
+            strike_price=90000.0,
+            strike_source="KALSHI_OFFICIAL",
+            open_timestamp=start - 10.0,
+            close_timestamp=close_ts,
+            seconds_remaining=close_ts - ts,
+            checkpoint_seconds_remaining=(close_ts - ts) % 180 or 180.0,
+            is_official_kalshi=True,
+            yes_bid_dollars=0.20,
+            yes_ask_dollars=0.21,
+            no_bid_dollars=0.79,
+            no_ask_dollars=0.80,
+        )
+        hub.last_kalshi_ts = ts
+        hub.last_spot_ts = ts
+        hub.live_price = 90010.0
+        orchestrator.final_engine.decide = lambda *args, _signal=signal: _final_report(_signal)
+        snapshots.append(orchestrator.evaluate_once(now=ts))
+    return snapshots
+
+
 def test_transient_directional_signal_is_not_officially_locked(tmp_path):
     ledger = PredictionLedger()
     now = 1_800_000_000.0
