@@ -1,4 +1,9 @@
-from app.engines import EarlyPredictionEngine
+from app.engines import EarlyPredictionEngine, ForecastEngine
+import uuid
+
+import pytest
+
+from app.database import PredictionLedger
 from app.models import (
     ContractInfo, EarlyPredictionReport, EvidenceMetrics, Signal, WeaknessReport,
 )
@@ -118,3 +123,79 @@ def test_degraded_feed_forces_early_wait():
     )
 
     assert report.signal == Signal.WAIT
+
+
+
+def test_engine_f_forecast_is_independent_directional_and_symmetric():
+    engine = ForecastEngine()
+    up = engine.forecast(
+        evidence(strike_z_score=1.8, raw_score=35.0),
+        weakness(),
+        contract(),
+    )
+    down = engine.forecast(
+        evidence(strike_z_score=-1.8, raw_score=-35.0),
+        weakness(),
+        contract(),
+    )
+
+    assert up.signal == Signal.UP
+    assert down.signal == Signal.DOWN
+    assert up.up_probability > down.up_probability
+    assert up.up_probability + up.down_probability == pytest.approx(1.0)
+
+
+def test_engine_f_waits_when_forecast_inputs_are_degraded():
+    report = ForecastEngine().forecast(
+        evidence(strike_z_score=2.5, raw_score=80.0),
+        weakness(feed_degraded=True, weakness_score=100.0),
+        contract(),
+    )
+
+    assert report.signal == Signal.WAIT
+
+
+def test_engine_f_lock_is_persisted_and_immutable_in_supabase():
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-ENGINEF-" + uuid.uuid4().hex[:12]
+    original = {
+        "contract_ticker": ticker,
+        "timestamp_iso": "2026-11-24 12:05:00 UTC",
+        "epoch_ts": 1795541100.0,
+        "signal": "UP",
+        "confidence": 72.0,
+        "up_prob": 0.72,
+        "down_prob": 0.28,
+        "strike_price": 100000.0,
+        "btc_price_at_lock": 100010.0,
+    }
+
+    first = ledger.record_forecast_lock(original)
+    second = ledger.record_forecast_lock({
+        **original,
+        "signal": "DOWN",
+        "confidence": 81.0,
+        "up_prob": 0.19,
+        "down_prob": 0.81,
+    })
+
+    assert first["signal"] == "UP"
+    assert second["signal"] == "UP"
+    assert second["confidence"] == 72.0
+    assert ledger.get_forecast_lock(ticker)["signal"] == "UP"
+
+
+def test_engine_f_rejects_wait_locks():
+    ledger = PredictionLedger()
+    with pytest.raises(ValueError, match="Only directional"):
+        ledger.record_forecast_lock({
+            "contract_ticker": "KXBTC15M-ENGINEF-WAIT-" + uuid.uuid4().hex[:8],
+            "timestamp_iso": "2026-11-24 12:05:00 UTC",
+            "epoch_ts": 1795541100.0,
+            "signal": "WAIT",
+            "confidence": 50.0,
+            "up_prob": 0.5,
+            "down_prob": 0.5,
+            "strike_price": 100000.0,
+            "btc_price_at_lock": 100000.0,
+        })
