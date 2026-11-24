@@ -16,6 +16,7 @@ class Settings:
     max_daily_loss_usd: float = float(os.getenv("MAX_DAILY_LOSS_USD", "100.0"))
     min_net_edge_cents: float = float(os.getenv("MIN_NET_EDGE_CENTS", "0.03"))
     db_path: str = os.getenv("PREDICTOR_DB_PATH", "satsignal_btc15m.db")
+    database_url: str | None = os.getenv("DATABASE_URL") or None
     kalshi_public_base_url: str = os.getenv("KALSHI_PUBLIC_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
     kalshi_demo_base_url: str = os.getenv("KALSHI_DEMO_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     kalshi_prod_base_url: str = os.getenv("KALSHI_PROD_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
@@ -44,9 +45,21 @@ storage_mount_path = os.getenv("PREDICTOR_STORAGE_MOUNT", "/data")
 persistent_storage_required = os.getenv(
     "PREDICTOR_REQUIRE_PERSISTENT_STORAGE", "0"
 ).strip().lower() in {"1", "true", "yes", "on"}
-storage_mount_status = enforce_persistent_storage(
-    settings.db_path,
-    storage_mount_path,
-    required=persistent_storage_required,
+storage_mount_status = (
+    {
+        "status": "MANAGED_DATABASE_CONFIGURED",
+        "persistent_mount_confirmed": None,
+        "managed_database_configured": True,
+        "storage_type": "POSTGRESQL",
+        "database_url_configured": True,
+        "mount_path": None,
+        "database_path": None,
+    }
+    if settings.database_url
+    else enforce_persistent_storage(
+        settings.db_path,
+        storage_mount_path,
+        required=persistent_storage_required,
+    )
 )
 
