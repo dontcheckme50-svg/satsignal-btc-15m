@@ -507,18 +507,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const healthy = h.status === "HEALTHY" && (h.storage_type === "POSTGRESQL" ? h.connection_check === "ok" : h.integrity_check === "ok");
       statusEl.textContent = h.status || "UNKNOWN";
       statusEl.style.color = healthy ? "var(--up)" : "var(--down)";
-      set("storage-backend", h.storage_type === "POSTGRESQL" ? "SUPABASE / POSTGRESQL" : (h.storage_type === "FILE" ? "SQLITE (FILE)" : (h.storage_type || "UNKNOWN")));
-      set("storage-file", h.database_file_exists ? "PRESENT" : "NOT VERIFIED");
+      set("storage-backend", h.provider === "SUPABASE" ? "SUPABASE / POSTGRESQL" : (h.storage_type || "UNKNOWN"));
+      set("storage-file", "NOT APPLICABLE");
       set("storage-journal", h.journal_mode || "--");
       set("storage-integrity", h.integrity_check || "--");
-      set("storage-persistence", persistent.persistent_mount_confirmed ? "CONFIRMED" : "UNVERIFIED");
+      set("storage-persistence", h.provider === "SUPABASE" ? "SUPABASE MANAGED" : "UNAVAILABLE");
       set("storage-size", h.database_size_bytes != null ? (Number(h.database_size_bytes)/1048576).toFixed(2)+" MB" : "--");
       set("storage-predictions", counts.predictions ?? 0);
       set("storage-observations", counts.prediction_observations ?? 0);
       set("storage-trades-exchange", (counts.trades ?? 0)+" / "+(counts.multi_exchange_reference ?? 0));
-      document.getElementById("storage-note").textContent = persistent.persistent_mount_confirmed
-        ? "SQLite remains the active production store. Database integrity and persistent volume are verified."
-        : "SQLite remains the active production store. Database diagnostics are live; durable volume persistence is not confirmed by the host.";
+      document.getElementById("storage-note").textContent = h.provider === "SUPABASE" && h.connection_check === "ok"
+        ? "Supabase PostgreSQL is active. Connection and ledger record counts are verified."
+        : "Supabase PostgreSQL connection is unavailable. Check the private DATABASE_URL secret and database connectivity.";
     } catch(e) {
       statusEl.textContent = "UNAVAILABLE";
       statusEl.style.color = "var(--down)";
