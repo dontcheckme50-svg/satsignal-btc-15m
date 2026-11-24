@@ -504,14 +504,94 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("storage-note").textContent = "Storage diagnostics could not be loaded. No storage settings were changed.";
     }
   }
-  async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
+  let wsReconnectDelay = 1000;
+  let wsReconnectTimer = null;
+  let wsFallbackTimer = null;
+  let activeSocket = null;
+  async function fetchInitial() {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      if (res.ok) updateUI(await res.json());
+    } catch(e) {}
+  }
+  function startStateFallback() {
+    if (wsFallbackTimer !== null) return;
+    wsFallbackTimer = setInterval(fetchInitial, 2000);
+  }
+  function stopStateFallback() {
+    if (wsFallbackTimer !== null) clearInterval(wsFallbackTimer);
+    wsFallbackTimer = null;
+  }
   function connectWS() {
     const wsEl = document.getElementById("ws-status");
-    const ws = new WebSocket(`${location.protocol==="https:"?"wss:":"ws:"}//${location.host}/ws`);
-    ws.onopen = () => { wsEl.textContent = "LIVE STREAM"; wsEl.style.color = "var(--up)"; };
-    ws.onmessage = (e) => updateUI(JSON.parse(e.data));
-    ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
+    if (activeSocket && (activeSocket.readyState === WebSocket.OPEN || activeSocket.readyState === WebSocket.CONNECTING)) return;
+    let ws;
+    try {
+      ws = new WebSocket(`${location.protocol==="https:"?"wss:":"ws:"}//${location.host}/ws`);
+      activeSocket = ws;
+    } catch(e) {
+      wsEl.textContent = "POLLING · WS UNAVAILABLE";
+      wsEl.style.color = "var(--wait)";
+      startStateFallback();
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      if (activeSocket !== ws) return;
+      wsReconnectDelay = 1000;
+      if (wsReconnectTimer !== null) clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = null;
+      stopStateFallback();
+      wsEl.textContent = "LIVE STREAM";
+      wsEl.style.color = "var(--up)";
+    };
+    ws.onmessage = (e) => {
+      try { updateUI(JSON.parse(e.data)); }
+      catch(err) { console.warn("Ignoring malformed WebSocket update", err); }
+    };
+    ws.onerror = () => { try { ws.close(); } catch(e) {} };
+    ws.onclose = () => {
+      if (activeSocket !== ws) return;
+      activeSocket = null;
+      wsEl.textContent = "POLLING · RECONNECTING";
+      wsEl.style.color = "var(--wait)";
+      startStateFallback();
+      scheduleReconnect();
+    };
   }
+  function scheduleReconnect() {
+    if (wsReconnectTimer !== null) return;
+    const delay = wsReconnectDelay;
+    wsReconnectDelay = Math.min(30000, Math.round(wsReconnectDelay * 1.8));
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      connectWS();
+    }, delay);
+  }
+  document.getElementById("forecast-lock-button").addEventListener("click", async () => {
+    const button = document.getElementById("forecast-lock-button");
+    const note = document.getElementById("forecast-lock-note");
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Locking forecast…";
+    note.textContent = "Submitting the Engine F lock for the active official contract…";
+    try {
+      const response = await fetch("/api/forecast/lock", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+        cache: "no-store"
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.detail || `Lock request failed (${response.status})`);
+      }
+      note.textContent = `Locked ${result.lock.signal} for ${result.lock.contract_ticker} at ${result.lock.timestamp_iso}.`;
+      await fetchInitial();
+    } catch(err) {
+      note.textContent = err.message || "Lock request failed. Check connection and try again.";
+      await fetchInitial();
+    }
+  });
   fetchInitial(); fetchFeeds(); fetchMultiExchange(); fetchOrchestratorHealth(); fetchStorageHealth(); connectWS(); setInterval(tickTimers, 250); setInterval(fetchFeeds, 2500); setInterval(fetchMultiExchange, 2000); setInterval(fetchOrchestratorHealth, 2500); setInterval(fetchStorageHealth, 5000);
 </script>
 </body>
