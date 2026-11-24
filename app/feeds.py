@@ -135,7 +135,7 @@ class MarketDataHub:
         ts: float,
         bids: List[Tuple[float, float]],
         asks: List[Tuple[float, float]],
-        source: str = "UNKNOWN",
+        source: Optional[str] = None,
     ) -> bool:
         try:
             ts = float(ts)
@@ -152,7 +152,9 @@ class MarketDataHub:
         asks_sorted = sorted(parsed_asks, key=lambda x: x[0])[:20]
         if bids_sorted[0][0] >= asks_sorted[0][0]:
             return False
-        source = str(source or "UNKNOWN")
+        # Preserve the older caller contract: when a book source is omitted,
+        # associate it with the currently active spot venue.
+        source = str(source or self.active_spot_source or "UNKNOWN")
         if source == self.last_book_source and self.last_book_ts and ts < self.last_book_ts:
             return False
         self.bids = bids_sorted
@@ -292,11 +294,29 @@ class MarketDataHub:
     def get_multi_exchange_snapshot(self, now: Optional[float] = None) -> dict:
         now = time.time() if now is None else float(now)
         snapshot = self.multi_exchange.get_snapshot(now)
-        snapshot["primary_spot_price"] = self.live_price
+        spot_age = safe_age_seconds(self.last_spot_ts, now)
+        brti_age = safe_age_seconds(self.last_brti_ts, now)
+        spot_fresh = spot_age is not None and spot_age <= settings.stale_feed_threshold_sec
+        brti_fresh = (
+            self.brti_status == "LIVE"
+            and brti_age is not None
+            and brti_age <= settings.stale_feed_threshold_sec
+        )
+        snapshot["primary_spot_price"] = self.live_price if spot_fresh else None
         snapshot["primary_spot_source"] = self.active_spot_source
-        snapshot["official_brti_price"] = (
-            self.official_brti_price if self.brti_status == "LIVE" and safe_age_seconds(self.last_brti_ts, now) is not None
-            and safe_age_seconds(self.last_brti_ts, now) <= settings.stale_feed_threshold_sec else None
+        snapshot["primary_spot_age_seconds"] = round(spot_age, 3) if spot_age is not None else None
+        snapshot["official_brti_price"] = self.official_brti_price if brti_fresh else None
+        snapshot["official_brti_age_seconds"] = round(brti_age, 3) if brti_age is not None else None
+        reference_price = snapshot.get("reference_price")
+        primary_price = snapshot["primary_spot_price"]
+        brti_price = snapshot["official_brti_price"]
+        snapshot["reference_vs_primary_bps"] = (
+            round((float(reference_price) - float(primary_price)) / float(primary_price) * 10000.0, 4)
+            if reference_price is not None and primary_price is not None and primary_price > 0 else None
+        )
+        snapshot["reference_vs_brti_bps"] = (
+            round((float(reference_price) - float(brti_price)) / float(brti_price) * 10000.0, 4)
+            if reference_price is not None and brti_price is not None and brti_price > 0 else None
         )
         return snapshot
 
@@ -309,6 +329,11 @@ class MarketDataHub:
                 async with session.get(url, timeout=6) as resp:
                     if resp.status != 200: return None
                     m = (await resp.json()).get("market", {})
+                    # Never attribute a settlement response for a different
+                    # market to the requested contract, even if the API returns
+                    # a valid settled result.
+                    if m.get("ticker") != ticker:
+                        return None
                     if m.get("status") == "settled" and m.get("result") in ("yes", "no"):
                         return ("UP" if m["result"] == "yes" else "DOWN"), (float(m["expiration_value"]) if m.get("expiration_value") is not None else None)
         except Exception:
