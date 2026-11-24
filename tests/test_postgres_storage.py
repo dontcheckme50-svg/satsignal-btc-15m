@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_postgres_ledger_lock_settlement_and_scoreboard():
     ticker = "KXBTC15M-PG-" + uuid.uuid4().hex[:12]
-    ledger = PredictionLedger(":memory:")
+    ledger = PredictionLedger()
     prediction = PredictionRecord(
         contract_ticker=ticker,
         timestamp_iso="2026-11-20 12:00:00 UTC",
