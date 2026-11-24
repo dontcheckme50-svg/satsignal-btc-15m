@@ -8,14 +8,20 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self.database_url = getattr(settings, "database_url", None)
+        # Create parent directories only for file-backed SQLite. When DATABASE_URL
+        # is configured, PostgreSQL is authoritative; never silently fall back.
+        if not self.database_url and self.db_path != ":memory:" and not self.db_path.startswith("file:"):
+            parent = os.path.dirname(os.path.abspath(self.db_path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        # Each operation owns its connection. A bounded busy timeout absorbs
-        # brief overlap between the prediction, settlement, and API workers.
-        conn = sqlite3.connect(
-            self.db_path, timeout=15.0, check_same_thread=False
-        )
+    def _connect(self):
+        if self.database_url:
+            from app.postgres_compat import connect
+            return connect(self.database_url)
+        conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=15000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
@@ -26,9 +32,10 @@ class PredictionLedger:
         conn = self._connect()
         try:
             if immediate:
-                # Settlement reads and writes must share one reserved write
-                # transaction so two reconcilers cannot grade the same trade.
-                conn.execute("BEGIN IMMEDIATE")
+                if self.database_url:
+                    conn.execute("SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))")
+                else:
+                    conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -41,7 +48,8 @@ class PredictionLedger:
         with self._connection() as conn:
             # WAL is persistent database state; configure it during initialization,
             # not on every short-lived read connection.
-            conn.execute("PRAGMA journal_mode=WAL;")
+            if not self.database_url:
+                conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS predictions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +166,7 @@ class PredictionLedger:
 
 
     def get_storage_health(self) -> dict:
-        """Report whether the configured SQLite store is file-backed and readable."""
+        """Report connectivity, integrity, and record counts for the selected backend."""
         try:
             with self._connection() as conn:
                 journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
@@ -167,6 +175,17 @@ class PredictionLedger:
                 counts = {}
                 for table in ("predictions", "prediction_observations", "trades", "multi_exchange_reference"):
                     counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            if self.database_url:
+                return {
+                    "status": "HEALTHY",
+                    "storage_type": "POSTGRESQL",
+                    "database_file_exists": None,
+                    "database_size_bytes": None,
+                    "journal_mode": None,
+                    "integrity_check": "not_applicable",
+                    "connection_check": "ok",
+                    "record_counts": counts,
+                }
             is_memory = self.db_path == ":memory:" or "mode=memory" in self.db_path
             file_exists = False if is_memory else os.path.isfile(self.db_path)
             file_size = os.path.getsize(self.db_path) if file_exists else 0
@@ -183,8 +202,11 @@ class PredictionLedger:
         except Exception as exc:
             return {
                 "status": "UNAVAILABLE",
-                "storage_type": "FILE" if self.db_path != ":memory:" else "MEMORY",
-                "database_file_exists": os.path.isfile(self.db_path) if self.db_path != ":memory:" else False,
+                "storage_type": "POSTGRESQL" if self.database_url else ("FILE" if self.db_path != ":memory:" else "MEMORY"),
+                "database_file_exists": (
+                    None if self.database_url
+                    else (os.path.isfile(self.db_path) if self.db_path != ":memory:" else False)
+                ),
                 "integrity_check": "ERROR",
                 "error_type": type(exc).__name__,
             }
@@ -438,13 +460,11 @@ class PredictionLedger:
             return int(cur.lastrowid)
 
     def get_unsettled_contract_tickers(self) -> List[str]:
-        # Reconcile both official forecast locks and open paper trades.
-        # Paper entries now require a matching immutable directional lock, but
-        # retaining the trade query also recovers any legacy open paper rows.
+        # Reconcile both official forecast locks and open paper trades. A trade
+        # can legitimately open before the two-vote forecast lock exists.
         # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
-            rows = conn.execute(
-                """WITH pending AS (
+            pending_sql = """WITH pending AS (
                        SELECT contract_ticker, MIN(epoch_ts) AS first_seen
                        FROM predictions
                        WHERE settled = 0 AND is_official_lock = 1
@@ -464,7 +484,12 @@ class PredictionLedger:
                    FROM pending
                    GROUP BY contract_ticker
                    ORDER BY first_seen ASC"""
-            ).fetchall()
+            if self.database_url:
+                pending_sql = pending_sql.replace(
+                    "CAST(strftime('%s', substr(MIN(timestamp_iso), 1, 19)) AS REAL)",
+                    "COALESCE(EXTRACT(EPOCH FROM MIN(to_timestamp(timestamp_iso, 'YYYY-MM-DD HH24:MI:SS UTC'))), 0.0)"
+                )
+            rows = conn.execute(pending_sql).fetchall()
             return [r["contract_ticker"] for r in rows]
 
     def count_trades_for_ticker(self, contract_ticker: str) -> int:
