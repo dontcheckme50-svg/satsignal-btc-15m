@@ -2,7 +2,7 @@ import asyncio, time
 from contextlib import asynccontextmanager
 from typing import Optional, Set
 import uvicorn
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from app.config import settings, storage_mount_status, persistent_storage_required
 from app.database import PredictionLedger
@@ -75,6 +75,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SATSIGNAL BTC 15M API", version="2.0.0", lifespan=lifespan)
 
+@app.get("/api/time")
+async def get_server_time():
+    # Millisecond epoch is used for dashboard synchronization; the ISO display
+    # timestamp is intentionally not used because it is formatted to whole seconds.
+    return {"server_time_epoch_ms": time.time_ns() // 1_000_000}
+
+
 @app.get("/api/health")
 async def get_health():
     # Keep the process liveness response HTTP 200 so a transient storage
@@ -125,7 +132,32 @@ async def get_prediction():
 async def get_engines():
     if orchestrator.latest_snapshot is None: return {"status": "warming_up"}
     s = orchestrator.latest_snapshot
-    return {"summary": s.engines.model_dump(), "evidence": s.evidence.model_dump(), "weakness": s.weakness.model_dump(), "regime": s.regime.model_dump(), "early": s.early.model_dump(), "final": s.final.model_dump()}
+    return {"summary": s.engines.model_dump(), "evidence": s.evidence.model_dump(), "weakness": s.weakness.model_dump(), "regime": s.regime.model_dump(), "early": s.early.model_dump(), "final": s.final.model_dump(), "forecast": s.forecast.model_dump()}
+
+@app.get("/api/forecast")
+async def get_forecast():
+    if orchestrator.latest_snapshot is None:
+        return {"status": "warming_up", "forecast": None}
+    snap = orchestrator.latest_snapshot
+    return {
+        "contract_ticker": snap.contract.ticker,
+        "forecast": snap.forecast.model_dump(),
+        "engine_status": snap.engines.engine_f_forecast,
+    }
+
+
+@app.post("/api/forecast/lock")
+async def lock_forecast():
+    try:
+        row = orchestrator.lock_forecast()
+        return {
+            "ok": True,
+            "lock": row,
+            "forecast": orchestrator.latest_snapshot.forecast.model_dump(),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
 
 @app.get("/api/market")
 async def get_market():
@@ -290,13 +322,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Engine Agreement</span><span id="agreement-val">--</span></div>
     </div>
     <div class="card">
-      <h3>Five Specialized Intelligence Engines</h3>
+      <h3>Six Specialized Intelligence Engines</h3>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine A (Evidence)</span><span id="eng-a">--</span></div>
       <div class="kv"><span><i id="dot-b" class="feed-dot st-ACTIVE"></i>Engine B (Weakness)</span><span id="eng-b">--</span></div>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine C (Regime)</span><span id="eng-c">--</span></div>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine D (Early)</span><span id="eng-d">--</span></div>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine E (Final)</span><span id="eng-e">--</span></div>
+      <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine F (Forecast)</span><span id="eng-f">--</span></div>
       <div class="rationale" id="engine-notes"></div>
+    </div>
+    <div class="card" id="engine-f-card">
+      <h3>Engine F — Independent Forecast</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <span id="forecast-badge" class="badge sig-WAIT">WAIT</span>
+        <span id="forecast-conf" class="big-val">50.0%</span>
+      </div>
+      <div class="kv"><span>UP probability</span><span id="forecast-up">50.0%</span></div>
+      <div class="kv"><span>DOWN probability</span><span id="forecast-down">50.0%</span></div>
+      <div class="rationale" id="forecast-rationale">Waiting for live inputs.</div>
+      <div class="kv"><span>Forecast lock</span><span id="forecast-lock-status">NOT LOCKED</span></div>
+      <button id="forecast-lock-button" type="button" disabled style="width:100%;margin-top:12px;padding:11px;border:1px solid #38bdf8;border-radius:8px;background:#0c4a6e;color:#e0f2fe;font-weight:800;cursor:pointer;">Lock Engine F Forecast</button>
+      <div class="rationale" id="forecast-lock-note">Manual Engine F lock is separate from Engine E and does not place a trade.</div>
     </div>
     <div class="card">
       <h3>Order Flow & Microstructure</h3>
@@ -366,15 +412,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   const fmtUSD = (v) => v == null ? "--" : "$" + Number(v).toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
   const sigBadge = (s) => `<span class="badge sig-${s}" style="padding:2px 7px;font-size:.74rem;">${s}</span>`;
   const fmtClock = (sec) => { const s = Math.max(0, Math.floor(sec || 0)); return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; };
-  // Countdown is tied to the contract's absolute close timestamp, not a repeatedly
-  // rounded snapshot value. Estimate server/client clock offset on every update.
+  // Contract timers run from absolute server timestamps and a monotonic local
+  // clock. The server anchor is refreshed independently; WebSocket snapshots
+  // never reset the running timer using a whole-second ISO timestamp.
   let contractCloseEpochMs = null;
   let contractOpenEpochMs = null;
-  let serverClockOffsetMs = 0;
+  let serverClockAnchorEpochMs = null;
+  let serverClockAnchorPerfMs = null;
+  let clockSyncRunning = false;
   const CHECKPOINT_SECONDS = 180;
+  let forecastLockPending = false;
+  let forecastLockReady = false;
+  function estimatedServerNowMs() {
+    if (serverClockAnchorEpochMs !== null && serverClockAnchorPerfMs !== null) {
+      return serverClockAnchorEpochMs + (performance.now() - serverClockAnchorPerfMs);
+    }
+    return Date.now();
+  }
+  async function syncServerClock() {
+    if (clockSyncRunning) return;
+    clockSyncRunning = true;
+    const started = performance.now();
+    try {
+      const response = await fetch("/api/time", {cache:"no-store"});
+      if (!response.ok) throw new Error("Server clock endpoint unavailable");
+      const payload = await response.json();
+      const finished = performance.now();
+      const serverEpochMs = Number(payload.server_time_epoch_ms);
+      if (!Number.isFinite(serverEpochMs) || serverEpochMs <= 0) throw new Error("Invalid server clock response");
+      // Use the request midpoint to compensate for network transit time.
+      serverClockAnchorEpochMs = serverEpochMs + ((finished - started) / 2);
+      serverClockAnchorPerfMs = (started + finished) / 2;
+      tickTimers();
+    } catch (error) {
+      // Keep the previous anchor during transient sync failures.
+    } finally {
+      clockSyncRunning = false;
+    }
+  }
   function tickTimers() {
     if (contractCloseEpochMs === null || contractOpenEpochMs === null) return;
-    const serverNowMs = Date.now() + serverClockOffsetMs;
+    const serverNowMs = estimatedServerNowMs();
     const remaining = Math.max(0, (contractCloseEpochMs - serverNowMs) / 1000);
     const elapsed = Math.max(0, (serverNowMs - contractOpenEpochMs) / 1000);
     const checkpointElapsed = elapsed % CHECKPOINT_SECONDS;
@@ -388,10 +466,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("server-time").textContent = d.server_time_iso;
     contractCloseEpochMs = Number(d.contract.close_timestamp) * 1000;
     contractOpenEpochMs = Number(d.contract.open_timestamp) * 1000;
-    if (d.server_time_iso) {
-      const parsedServerTime = Date.parse(d.server_time_iso.replace(" UTC", "Z").replace(" ", "T"));
-      if (Number.isFinite(parsedServerTime)) serverClockOffsetMs = parsedServerTime - Date.now();
-    }
     document.getElementById("contract-meta").innerHTML = `Contract: <b>${d.contract.ticker}</b> | Kalshi Official: ${d.contract.is_official_kalshi ? "YES" : "NO (UTC Proxy)"} | <a class="api-link" href="/docs" target="_blank">API Docs</a>`;
     tickTimers();
     const fb = document.getElementById("final-badge"); fb.textContent = d.final.signal; fb.className = `badge sig-${d.final.signal}`;
@@ -412,6 +486,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%) · ${d.engines.engine_c_regime.status}`;
     document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}% · ${d.engines.engine_d_early.status}`;
     document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}% · ${d.engines.engine_e_final.status}`;
+    const forecast = d.forecast || {};
+    const forecastSignal = forecast.signal || "WAIT";
+    document.getElementById("eng-f").innerHTML = `${sigBadge(forecastSignal)} ${Number(forecast.confidence || 0).toFixed(1)}% · ${d.engines.engine_f_forecast?.status || "UNKNOWN"}`;
+    const forecastBadge = document.getElementById("forecast-badge");
+    forecastBadge.textContent = forecastSignal;
+    forecastBadge.className = `badge sig-${forecastSignal}`;
+    document.getElementById("forecast-conf").textContent = `${Number(forecast.confidence || 0).toFixed(1)}%`;
+    document.getElementById("forecast-up").textContent = `${(Number(forecast.up_probability ?? 0.5)*100).toFixed(1)}%`;
+    document.getElementById("forecast-down").textContent = `${(Number(forecast.down_probability ?? 0.5)*100).toFixed(1)}%`;
+    document.getElementById("forecast-rationale").textContent = forecast.rationale || "Forecast warming up.";
+    document.getElementById("forecast-lock-status").textContent = forecast.locked
+      ? `LOCKED ${forecast.locked_signal || ""} · ${forecast.locked_at_iso || ""}`
+      : "NOT LOCKED";
+    forecastLockReady = Boolean(d.contract.is_official_kalshi
+      && d.engines.engine_f_forecast?.input_health?.fresh
+      && ["UP","DOWN"].includes(forecastSignal)
+      && Number(d.contract.seconds_remaining) > 0
+      && !forecast.locked);
+    document.getElementById("forecast-lock-button").disabled = !forecastLockReady || forecastLockPending;
+    document.getElementById("forecast-lock-button").textContent = forecast.locked ? "Forecast Locked" : "Lock Engine F Forecast";
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
     document.getElementById("buy-bar").style.width = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-bar").style.width = `${d.evidence.selling_pressure_pct}%`;
@@ -436,6 +530,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td><span class="badge">LOCKED</span></td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
     }).join("");
   }
+  async function lockEngineFForecast() {
+    const button = document.getElementById("forecast-lock-button");
+    const note = document.getElementById("forecast-lock-note");
+    if (forecastLockPending || button.disabled) return;
+    forecastLockPending = true;
+    button.disabled = true;
+    note.textContent = "Locking current Engine F forecast...";
+    try {
+      const response = await fetch("/api/forecast/lock", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"}
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "Forecast lock was rejected");
+      forecastLockReady = false;
+      note.textContent = "Forecast locked for this official contract. This is separate from Engine E and does not place a trade.";
+      await fetchInitial();
+    } catch (error) {
+      note.textContent = error.message || "Could not lock forecast.";
+    } finally {
+      forecastLockPending = false;
+      button.disabled = !forecastLockReady;
+    }
+  }
+  document.getElementById("forecast-lock-button").addEventListener("click", lockEngineFForecast);
   async function fetchMultiExchange() {
     try {
       const res = await fetch("/api/multi-exchange");
@@ -545,6 +664,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   fetchInitial();
   connectWS();
+  syncServerClock();
+  setInterval(syncServerClock, 15000);
   setInterval(tickTimers, 250);
   scheduleNoOverlap(fetchFeeds, 10000);
   scheduleNoOverlap(fetchMultiExchange, 10000);
