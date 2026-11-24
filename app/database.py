@@ -1,4 +1,5 @@
 import sqlite3
+from threading import RLock
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -8,9 +9,18 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._lock = RLock()
+        # SQLite's :memory: database belongs to one connection. Keep that
+        # connection alive so subsequent ledger operations see the same DB.
+        self._memory_conn = None
+        if db_path == ":memory:":
+            self._memory_conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._memory_conn.row_factory = sqlite3.Row
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
+        if self._memory_conn is not None:
+            return self._memory_conn
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -19,15 +29,17 @@ class PredictionLedger:
 
     @contextmanager
     def _connection(self):
-        conn = self._connect()
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with self._lock:
+            conn = self._connect()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if conn is not self._memory_conn:
+                    conn.close()
 
     def _init_db(self) -> None:
         with self._connection() as conn:
