@@ -341,8 +341,8 @@ class PredictorOrchestrator:
             raise ValueError("Forecast is not ready yet")
         if not snap.contract.is_official_kalshi or snap.contract.strike_source != "KALSHI_OFFICIAL":
             raise ValueError("A manual forecast lock requires an official Kalshi contract")
-        if snap.contract.seconds_remaining <= settings.final_lockout_seconds:
-            raise ValueError("Forecast lock is closed during the final entry cutoff")
+        if snap.contract.seconds_remaining <= 0:
+            raise ValueError("The official contract has already closed")
         health = snap.engines.engine_f_forecast.get("input_health", {})
         if not health.get("fresh"):
             raise ValueError("Forecast inputs are stale or degraded")
