@@ -73,6 +73,17 @@ class PredictionLedger:
                     brti_side_at_lock TEXT,
                     spot_side_at_lock TEXT
                 );
+                CREATE TABLE IF NOT EXISTS forecast_locks (
+                    contract_ticker TEXT PRIMARY KEY,
+                    timestamp_iso TEXT NOT NULL,
+                    epoch_ts REAL NOT NULL,
+                    signal TEXT NOT NULL CHECK(signal IN ('UP','DOWN')),
+                    confidence REAL NOT NULL,
+                    up_prob REAL NOT NULL,
+                    down_prob REAL NOT NULL,
+                    strike_price REAL NOT NULL,
+                    btc_price_at_lock REAL NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS prediction_observations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     contract_ticker TEXT NOT NULL,
@@ -241,6 +252,35 @@ class PredictionLedger:
             item["venues"] = json.loads(item.pop("venues_json") or "[]")
             result.append(item)
         return result
+
+    def record_forecast_lock(self, lock: dict) -> dict:
+        """Create one immutable manual Engine F lock per contract."""
+        signal = str(lock.get("signal", "WAIT"))
+        if signal not in ("UP", "DOWN"):
+            raise ValueError("Only directional Engine F forecasts can be locked")
+        with self._connection() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO forecast_locks
+                   (contract_ticker, timestamp_iso, epoch_ts, signal, confidence,
+                    up_prob, down_prob, strike_price, btc_price_at_lock)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (lock["contract_ticker"], lock["timestamp_iso"], lock["epoch_ts"],
+                 signal, lock["confidence"], lock["up_prob"], lock["down_prob"],
+                 lock["strike_price"], lock["btc_price_at_lock"]),
+            )
+            row = conn.execute(
+                "SELECT * FROM forecast_locks WHERE contract_ticker = ?",
+                (lock["contract_ticker"],),
+            ).fetchone()
+        return dict(row)
+
+    def get_forecast_lock(self, contract_ticker: str) -> Optional[dict]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM forecast_locks WHERE contract_ticker = ?",
+                (contract_ticker,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def record_prediction(self, rec: PredictionRecord) -> int:
         """Persist the one official scored prediction for a contract, idempotently."""
