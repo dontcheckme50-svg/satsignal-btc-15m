@@ -13,6 +13,7 @@ def test_ledger_uses_supabase_postgres_without_local_database_path():
     assert health["record_counts"] == {
         "predictions": 0,
         "prediction_observations": 0,
+        "forecast_locks": 0,
         "trades": 0,
         "multi_exchange_reference": 0,
     }
