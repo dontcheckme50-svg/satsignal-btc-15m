@@ -36,7 +36,7 @@ def _ready_hub(contract: ContractInfo, now: float, price: float = 90010.0):
 
 
 def test_contract_rollover_resets_observation_throttle(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "rollover-observations.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     first = _official_contract("KXBTC15M-FIRST", now)
     hub = _ready_hub(first, now)
@@ -71,7 +71,7 @@ def test_contract_rollover_resets_observation_throttle(tmp_path):
 
 
 def test_final_lockout_creates_single_wait_lock_when_no_direction(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "final-lockout.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract("KXBTC15M-LOCKOUT", now, remaining=64.0)
     hub = _ready_hub(contract, now)
@@ -89,7 +89,7 @@ def test_final_lockout_creates_single_wait_lock_when_no_direction(tmp_path):
 
 
 def test_synthetic_contract_never_creates_official_lock_or_observation(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "synthetic-recording.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     hub = MarketDataHub()
     hub.live_price = 90010.0
@@ -124,7 +124,7 @@ def _prediction(ticker: str, ts: float, signal: Signal) -> PredictionRecord:
 
 
 def test_official_lock_is_idempotent_and_immutable_per_contract(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "unique-lock.db"))
+    ledger = PredictionLedger()
     ticker = "KXBTC15M-UNIQUE"
     first_id = ledger.record_prediction(_prediction(ticker, 100.0, Signal.UP))
     second_id = ledger.record_prediction(_prediction(ticker, 130.0, Signal.DOWN))
@@ -138,7 +138,7 @@ def test_official_lock_is_idempotent_and_immutable_per_contract(tmp_path):
 
 
 def test_observations_do_not_inflate_scoreboard_and_lock_settles_once(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "observation-scoreboard.db"))
+    ledger = PredictionLedger()
     ticker = "KXBTC15M-OBS"
     for ts, sig in [(100.0, Signal.UP), (130.0, Signal.DOWN), (160.0, Signal.UP)]:
         ledger.record_prediction_observation(ticker, ts, 500.0, {"signal": sig.value, "prob": 0.7})
@@ -154,100 +154,22 @@ def test_observations_do_not_inflate_scoreboard_and_lock_settles_once(tmp_path):
     assert sb.final_losses == 0
 
 
-def test_existing_snapshot_history_migrates_to_one_legacy_score_record(tmp_path):
-    import sqlite3
+def test_postgres_schema_reinitialization_preserves_official_lock():
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-POSTGRES-SCHEMA-RESTART"
+    ledger.record_prediction(_prediction(ticker, 100.0, Signal.UP))
 
-    db_path = str(tmp_path / "legacy-history.db")
-    conn = sqlite3.connect(db_path)
-    conn.execute("""
-        CREATE TABLE predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            contract_ticker TEXT NOT NULL,
-            timestamp_iso TEXT NOT NULL,
-            epoch_ts REAL NOT NULL,
-            strike_price REAL NOT NULL,
-            btc_price_at_pred REAL NOT NULL,
-            seconds_remaining REAL NOT NULL,
-            main_signal TEXT NOT NULL,
-            early_signal TEXT NOT NULL,
-            final_signal TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            up_prob REAL NOT NULL,
-            down_prob REAL NOT NULL,
-            regime TEXT NOT NULL,
-            settled INTEGER NOT NULL DEFAULT 0,
-            settlement_source TEXT,
-            settlement_price REAL,
-            actual_outcome TEXT,
-            final_won INTEGER,
-            main_won INTEGER,
-            early_won INTEGER
-        )
-    """)
-    for epoch, sig in [(100.0, "UP"), (130.0, "DOWN"), (160.0, "UP")]:
-        conn.execute(
-            """INSERT INTO predictions (contract_ticker, timestamp_iso, epoch_ts, strike_price,
-               btc_price_at_pred, seconds_remaining, main_signal, early_signal, final_signal,
-               confidence, up_prob, down_prob, regime, settled, actual_outcome, final_won)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            ("KXBTC15M-LEGACY", "2027-01-01 00:00:00", epoch, 90000.0, 90010.0,
-             500.0, sig, sig, sig, 70.0, 0.7, 0.3, "STABLE MARKET", 1, "UP", 1),
-        )
-    conn.commit()
-    conn.close()
+    ledger._init_db()
 
-    ledger = PredictionLedger(db_path)
-    migrated = ledger.get_recent_predictions(limit=10)
-    assert len(migrated) == 1
-    assert migrated[0].epoch_ts == 160.0
-    assert migrated[0].is_official_lock is True
+    rows = ledger.get_recent_predictions(limit=10)
+    assert len(rows) == 1
+    assert rows[0].contract_ticker == ticker
+    assert rows[0].is_official_lock is True
     assert ledger.get_scoreboard().total_predictions == 1
-    with ledger._connection() as conn:
-        rows = conn.execute("SELECT COUNT(*) AS n FROM predictions WHERE is_official_lock = 0").fetchone()
-        assert rows["n"] == 2
-
-
-
-def _final_report(signal: Signal) -> FinalDecisionReport:
-    return FinalDecisionReport(
-        signal=signal,
-        confidence=72.0 if signal != Signal.WAIT else 0.0,
-        up_probability=0.72 if signal == Signal.UP else 0.28 if signal == Signal.DOWN else 0.5,
-        down_probability=0.28 if signal == Signal.UP else 0.72 if signal == Signal.DOWN else 0.5,
-        agreement_status="TEST",
-        rationale="Deterministic lifecycle test",
-    )
-
-
-def _evaluate_sequence(orchestrator, hub, ticker, start, signals, remaining=500.0):
-    snapshots = []
-    close_ts = start + remaining
-    for offset, signal in enumerate(signals):
-        ts = start + offset
-        hub.kalshi_contract = ContractInfo(
-            ticker=ticker,
-            strike_price=90000.0,
-            strike_source="KALSHI_OFFICIAL",
-            open_timestamp=start - 10.0,
-            close_timestamp=close_ts,
-            seconds_remaining=close_ts - ts,
-            checkpoint_seconds_remaining=(close_ts - ts) % 180 or 180.0,
-            is_official_kalshi=True,
-            yes_bid_dollars=0.20,
-            yes_ask_dollars=0.21,
-            no_bid_dollars=0.79,
-            no_ask_dollars=0.80,
-        )
-        hub.last_kalshi_ts = ts
-        hub.last_spot_ts = ts
-        hub.live_price = 90010.0
-        orchestrator.final_engine.decide = lambda *args, _signal=signal: _final_report(_signal)
-        snapshots.append(orchestrator.evaluate_once(now=ts))
-    return snapshots
 
 
 def test_transient_directional_signal_is_not_officially_locked(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "transient-direction.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract("KXBTC15M-TRANSIENT", now)
     hub = _ready_hub(contract, now)
@@ -261,7 +183,7 @@ def test_transient_directional_signal_is_not_officially_locked(tmp_path):
 
 
 def test_direction_reversal_resets_confirmation_and_requires_two_new_matches(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "reversal-confirmation.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract("KXBTC15M-REVERSAL", now)
     hub = _ready_hub(contract, now)
@@ -282,7 +204,7 @@ def test_direction_reversal_resets_confirmation_and_requires_two_new_matches(tmp
 
 
 def test_two_consecutive_matching_directions_create_one_immutable_lock(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "confirmed-direction.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract("KXBTC15M-CONFIRMED", now)
     hub = _ready_hub(contract, now)
@@ -298,7 +220,7 @@ def test_two_consecutive_matching_directions_create_one_immutable_lock(tmp_path)
 
 
 def test_unconfirmed_direction_at_final_lockout_becomes_wait(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "cutoff-confirmation.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract("KXBTC15M-CUTOFF", now, remaining=66.0)
     hub = _ready_hub(contract, now)
@@ -315,7 +237,7 @@ def test_unconfirmed_direction_at_final_lockout_becomes_wait(tmp_path):
 
 
 def test_contract_rollover_resets_directional_confirmation(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "rollover-confirmation.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     first = _official_contract("KXBTC15M-OLD", now)
     hub = _ready_hub(first, now)
@@ -340,7 +262,7 @@ def test_contract_rollover_resets_directional_confirmation(tmp_path):
 def test_rollover_feed_outage_cannot_carry_lock_confirmation_and_recovers_once(tmp_path):
     from app.config import settings
 
-    ledger = PredictionLedger(str(tmp_path / "rollover-feed-recovery.db"))
+    ledger = PredictionLedger()
     start = 1_800_000_000.0
     first = _official_contract("KXBTC15M-ROLL-OLD", start)
     hub = _ready_hub(first, start)
@@ -415,7 +337,7 @@ def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine
 ):
     from app.config import settings
 
-    ledger = PredictionLedger(str(tmp_path / f"stale-directional-lock-{stale_input}.db"))
+    ledger = PredictionLedger()
     now = 1_800_000_000.0
     contract = _official_contract(f"KXBTC15M-STALE-DIRECTION-{stale_input}", now, remaining=500.0)
     hub = _ready_hub(contract, now)
@@ -445,7 +367,7 @@ def test_stale_market_inputs_cannot_become_directional_lock_even_if_final_engine
 def test_late_old_contract_settlement_does_not_change_new_contract_score_or_trade(tmp_path):
     from app.models import TradeRecord
 
-    ledger = PredictionLedger(str(tmp_path / "late-old-settlement.db"))
+    ledger = PredictionLedger()
     old_ticker = "KXBTC15M-OLD-LATE-SETTLE"
     new_ticker = "KXBTC15M-NEW-STILL-OPEN"
 
@@ -506,7 +428,7 @@ def test_late_old_contract_settlement_does_not_change_new_contract_score_or_trad
 def test_price_only_settlement_without_contract_strike_leaves_trade_open(tmp_path):
     from app.models import TradeRecord
 
-    ledger = PredictionLedger(str(tmp_path / "trade-without-strike.db"))
+    ledger = PredictionLedger()
     ticker = "KXBTC15M-TRADE-NO-STRIKE"
     trade_id = ledger.record_trade(TradeRecord(
         mode="paper", contract_ticker=ticker,
