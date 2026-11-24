@@ -9,19 +9,21 @@ A FastAPI monitoring and prediction service for BTC 15-minute Kalshi markets. Th
 - Synthetic fallback windows are dashboard-only and cannot generate paper trades or enter the official prediction scoreboard.
 - The scoreboard counts one official prediction lock per contract. Live engine snapshots are stored separately as observations and never inflate prediction totals. A directional Final Decision must agree on two consecutive one-second evaluations for the same official contract before it locks; WAIT, reversal, or contract rollover resets confirmation. If no confirmed direction exists at the 65-second final-entry cutoff, WAIT is locked. Locks are immutable and settlement grades only the lock.
 - `/api/prediction-observations` returns the separate rolling observation history for analysis (limit 1,000; optional contract ticker filter).
+- `/api/forecast` exposes Engine F. `POST /api/forecast/lock` manually locks its current directional forecast for the active official contract; it is separate from the scored Engine E lock.
 - Prediction accuracy is based on settled official-contract locks. Pending locks are not wins or losses; WAIT signals are excluded from directional accuracy.
 - Paper-trading P&L is reported separately from prediction accuracy.
 - No prediction strategy is proven profitable. The probabilities are heuristic estimates, not calibrated guarantees.
 
-## Five engines (preserved)
+## Six engines
 
 A. Evidence: trade flow, delta/CVD, order-book imbalance, momentum, RSI, volatility, strike distance and structure.
 B. Weakness: stale feeds, absorption, low-volume drift, book/tape conflict and exhaustion.
 C. Regime: stable, shaky or high-risk reversal regime.
 D. Early: opening-window probability estimate.
 E. Final: combines evidence, weakness, regime and early-engine agreement into UP/DOWN/WAIT.
+F. Forecast: an independent strike-distance/tape blend with a separate manual per-contract lock. Its lock is stored separately, does not alter Engine E's automatic official lock, and does not place trades.
 
-The five-engine architecture is preserved. Reliability work hardens evidence inputs and gates: stale/missing order books degrade the forecast, short startup history is neutral for volume ratio, and a synthetic contract cannot produce an actionable final verdict.
+Reliability work hardens evidence inputs and gates: stale/missing order books degrade the forecast, short startup history is neutral for volume ratio, and a synthetic contract cannot produce an actionable final verdict.
 
 ## Local run (Windows PowerShell)
 
