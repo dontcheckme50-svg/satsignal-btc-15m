@@ -1,5 +1,3 @@
-import sqlite3
-
 from app.database import PredictionLedger
 
 
@@ -28,7 +26,7 @@ def _seed_settled_directional_rows(ledger: PredictionLedger, count: int) -> None
 
 
 def test_probability_calibration_stays_identity_with_insufficient_samples(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "small.db"))
+    ledger = PredictionLedger()
     _seed_settled_directional_rows(ledger, 29)
 
     weights = ledger.get_engine_weights()
@@ -39,7 +37,7 @@ def test_probability_calibration_stays_identity_with_insufficient_samples(tmp_pa
 
 
 def test_probability_calibration_activates_only_after_minimum_settled_sample(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "calibration.db"))
+    ledger = PredictionLedger()
     _seed_settled_directional_rows(ledger, 45)
 
     weights = ledger.get_engine_weights()
