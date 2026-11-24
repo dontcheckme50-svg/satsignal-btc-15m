@@ -7,9 +7,8 @@ from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, Trade
 class PredictionLedger:
     """Persistent ledger backed exclusively by the configured Supabase PostgreSQL database."""
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(self):
         self.database_url = settings.database_url
-        self.db_path = None
         # Allow import of the dashboard in unconfigured development/test environments.
         # Any ledger operation still fails explicitly; no local fallback is possible.
         if self.database_url:
