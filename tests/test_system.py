@@ -144,6 +144,9 @@ def test_http_dashboard_and_health_endpoints():
     assert dashboard.count('document.getElementById("forecast-lock-button").addEventListener("click"') == 1
     assert 'function startStateFallback()' in dashboard
     assert 'if (activeSocket !== ws) return;' in dashboard
+    assert "forecastLockPending = false;" in dashboard
+    assert "finally {" in dashboard
+    assert "button.disabled = !forecastLockReady;" in dashboard
     assert 'fetchOrchestratorHealth' in dashboard
     assert client.get("/docs").status_code == 200
     health = client.get("/api/health")
