@@ -89,7 +89,7 @@ async def get_prediction():
 async def get_engines():
     if orchestrator.latest_snapshot is None: return {"status": "warming_up"}
     s = orchestrator.latest_snapshot
-    return {"summary": s.engines.model_dump(), "evidence": s.evidence.model_dump(), "weakness": s.weakness.model_dump(), "regime": s.regime.model_dump(), "early": s.early.model_dump(), "final": s.final.model_dump()}
+    return {"summary": s.engines.model_dump(), "evidence": s.evidence.model_dump(), "weakness": s.weakness.model_dump(), "regime": s.regime.model_dump(), "early": s.early.model_dump(), "final": s.final.model_dump(), "forecast": s.forecast.model_dump()}
 
 @app.get("/api/forecast")
 async def get_forecast():
@@ -224,7 +224,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Engine Agreement</span><span id="agreement-val">--</span></div>
     </div>
     <div class="card">
-      <h3>Five Specialized Intelligence Engines</h3>
+      <h3>Six Specialized Intelligence Engines</h3>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine A (Evidence)</span><span id="eng-a">--</span></div>
       <div class="kv"><span><i id="dot-b" class="feed-dot st-ACTIVE"></i>Engine B (Weakness)</span><span id="eng-b">--</span></div>
       <div class="kv"><span><i class="feed-dot st-ACTIVE"></i>Engine C (Regime)</span><span id="eng-c">--</span></div>
