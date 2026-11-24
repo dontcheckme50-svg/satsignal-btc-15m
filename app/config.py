@@ -40,7 +40,7 @@ settings = Settings()
 if not settings.database_url:
     raise RuntimeError(
         "DATABASE_URL is required. Configure the Supabase PostgreSQL connection string; "
-        "local files, SQLite, and in-memory storage are not supported."
+        "local file and in-memory storage fallbacks are not supported."
     )
 if not settings.database_url.startswith(("postgres://", "postgresql://")):
     raise RuntimeError("DATABASE_URL must be a PostgreSQL/Supabase connection string.")
