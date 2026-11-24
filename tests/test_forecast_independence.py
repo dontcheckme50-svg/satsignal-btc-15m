@@ -1,4 +1,4 @@
-from app.engines import EarlyPredictionEngine
+from app.engines import EarlyPredictionEngine, ForecastEngine
 from app.models import (
     ContractInfo, EarlyPredictionReport, EvidenceMetrics, Signal, WeaknessReport,
 )
@@ -113,6 +113,35 @@ def test_degraded_feed_forces_early_wait():
             momentum_score=70.0,
             orderbook_imbalance=0.8,
         ),
+        weakness(feed_degraded=True, weakness_score=100.0),
+        contract(),
+    )
+
+    assert report.signal == Signal.WAIT
+
+
+def test_engine_f_forecast_is_independent_of_engine_e_final_output():
+    engine = ForecastEngine()
+    up = engine.forecast(
+        evidence(strike_z_score=1.8, raw_score=35.0),
+        weakness(),
+        contract(),
+    )
+    down = engine.forecast(
+        evidence(strike_z_score=-1.8, raw_score=-35.0),
+        weakness(),
+        contract(),
+    )
+
+    assert up.signal == Signal.UP
+    assert down.signal == Signal.DOWN
+    assert up.up_probability > down.up_probability
+    assert "Engine F" not in up.rationale  # rationale describes its own forecast inputs
+
+
+def test_engine_f_degraded_inputs_force_wait():
+    report = ForecastEngine().forecast(
+        evidence(strike_z_score=2.5, raw_score=80.0),
         weakness(feed_degraded=True, weakness_score=100.0),
         contract(),
     )
