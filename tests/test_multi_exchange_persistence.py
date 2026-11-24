@@ -2,7 +2,7 @@ from app.database import PredictionLedger
 
 
 def test_multi_exchange_history_preserves_per_venue_trade_flow(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "shadow-flow.sqlite3"))
+    ledger = PredictionLedger()
     snapshot = {
         "reference_price": 100.0,
         "status": "LIVE",
