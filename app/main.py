@@ -1,30 +1,65 @@
 import asyncio, time
 from contextlib import asynccontextmanager
-from typing import Set
+from typing import Optional, Set
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from app.config import settings
+from app.config import settings, storage_mount_status, persistent_storage_required
 from app.database import PredictionLedger
 from app.feeds import MarketDataHub, iso_now
 from app.models import DashboardSnapshot
 from app.orchestrator import PredictorOrchestrator
 
 hub = MarketDataHub()
-ledger = PredictionLedger(settings.db_path)
+ledger = PredictionLedger()
 orchestrator = PredictorOrchestrator(hub, ledger)
 active_clients: Set[WebSocket] = set()
+pending_ws_payloads: dict[WebSocket, str] = {}
+ws_send_tasks: dict[WebSocket, asyncio.Task] = {}
 START_TIME = time.time()
 
+
+
 def broadcast_snapshot(snap: DashboardSnapshot) -> None:
-    if not active_clients: return
+    if not active_clients:
+        return
     payload = snap.model_dump_json()
     for ws in list(active_clients):
-        asyncio.create_task(_safe_send(ws, payload))
+        pending_ws_payloads[ws] = payload
+        task = ws_send_tasks.get(ws)
+        if task is None or task.done():
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
-async def _safe_send(ws: WebSocket, payload: str) -> None:
-    try: await ws.send_text(payload)
-    except Exception: active_clients.discard(ws)
+async def _drain_ws(ws: WebSocket) -> None:
+    try:
+        while ws in active_clients:
+            payload = pending_ws_payloads.pop(ws, None)
+            if payload is None:
+                break
+            await ws.send_text(payload)
+    except Exception:
+        active_clients.discard(ws)
+        pending_ws_payloads.pop(ws, None)
+    finally:
+        ws_send_tasks.pop(ws, None)
+        if ws in active_clients and ws in pending_ws_payloads:
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
+
+async def _register_websocket(ws: WebSocket) -> None:
+    # Complete the initial send before registering for broadcasts. This keeps
+    # the initial frame from racing the per-client sender task.
+    initial = orchestrator.latest_snapshot
+    initial_payload = initial.model_dump_json() if initial is not None else None
+    if initial_payload is not None:
+        await ws.send_text(initial_payload)
+
+    active_clients.add(ws)
+    latest = orchestrator.latest_snapshot
+    if latest is not None:
+        latest_payload = latest.model_dump_json()
+        if latest_payload != initial_payload:
+            pending_ws_payloads[ws] = latest_payload
+            ws_send_tasks[ws] = asyncio.create_task(_drain_ws(ws))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,18 +69,50 @@ async def lifespan(app: FastAPI):
     yield
     orchestrator.stop()
     orch_task.cancel()
+    await asyncio.gather(orch_task, return_exceptions=True)
+    await orchestrator.shutdown_background_tasks()
     await hub.stop()
 
 app = FastAPI(title="SATSIGNAL BTC 15M API", version="2.0.0", lifespan=lifespan)
 
 @app.get("/api/health")
 async def get_health():
-    return {"status": "ok", "uptime_seconds": round(time.time() - START_TIME, 1), "server_time_iso": iso_now(), "trading_mode": settings.trading_mode, "has_live_snapshot": orchestrator.latest_snapshot is not None}
+    # Keep the process liveness response HTTP 200 so a transient storage
+    # diagnostic does not trigger an unnecessary host restart. Storage health
+    # is reported independently and in detail for operators.
+    storage = await asyncio.to_thread(ledger.get_storage_health)
+    return {
+        "status": "ok",
+        "uptime_seconds": round(time.time() - START_TIME, 1),
+        "server_time_iso": iso_now(),
+        "trading_mode": settings.trading_mode,
+        "has_live_snapshot": orchestrator.latest_snapshot is not None,
+        "storage_status": storage.get("status", "UNKNOWN"),
+        "storage_integrity_check": storage.get("integrity_check", "UNKNOWN"),
+        "storage": storage,
+        "persistent_storage": storage_mount_status,
+        "persistent_storage_required": persistent_storage_required,
+    }
+
+
+@app.get("/api/storage/health")
+async def get_storage_health():
+    storage = await asyncio.to_thread(ledger.get_storage_health)
+    return {
+        **storage,
+        "persistent_storage": storage_mount_status,
+        "persistent_storage_required": persistent_storage_required,
+    }
+
+@app.get("/api/orchestrator/health")
+async def get_orchestrator_health():
+    return orchestrator.get_runtime_health()
 
 @app.get("/api/state")
 async def get_state():
     if orchestrator.latest_snapshot is None:
-        return {"status": "warming_up", "server_time_iso": iso_now(), "feeds": [f.model_dump() for f in hub.get_feed_statuses()], "scoreboard": ledger.get_scoreboard().model_dump()}
+        scoreboard = await asyncio.to_thread(ledger.get_scoreboard)
+        return {"status": "warming_up", "server_time_iso": iso_now(), "feeds": [f.model_dump() for f in hub.get_feed_statuses()], "scoreboard": scoreboard.model_dump()}
     return orchestrator.latest_snapshot.model_dump()
 
 @app.get("/api/prediction")
@@ -70,28 +137,101 @@ async def get_market():
 async def get_feeds():
     return {"feeds": [f.model_dump() for f in hub.get_feed_statuses()]}
 
+@app.get("/api/multi-exchange")
+async def get_multi_exchange():
+    snapshot = hub.get_multi_exchange_snapshot()
+    contract = orchestrator.active_contract
+    snapshot["strike_price"] = contract.strike_price if contract else None
+
+    reference_price = snapshot.get("reference_price")
+    primary_spot_price = snapshot.get("primary_spot_price")
+    official_brti_price = snapshot.get("official_brti_price")
+
+    snapshot["reference_vs_primary_bps"] = (
+        round(
+            (float(reference_price) - float(primary_spot_price))
+            / float(primary_spot_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and primary_spot_price is not None
+        and float(primary_spot_price) > 0
+        else None
+    )
+    snapshot["reference_vs_brti_bps"] = (
+        round(
+            (float(reference_price) - float(official_brti_price))
+            / float(official_brti_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and official_brti_price is not None
+        and float(official_brti_price) > 0
+        else None
+    )
+    snapshot["reference_vs_strike_bps"] = (
+        round(
+            (float(reference_price) - float(contract.strike_price))
+            / float(contract.strike_price)
+            * 10000.0,
+            4,
+        )
+        if reference_price is not None
+        and contract
+        and contract.strike_price > 0
+        else None
+    )
+    return snapshot
+
+
+@app.get("/api/multi-exchange/history")
+async def get_multi_exchange_history(limit: int = Query(default=200, ge=1, le=1000)):
+    observations = await asyncio.to_thread(ledger.get_multi_exchange_reference_history, limit)
+    return {"observations": observations}
+
 @app.get("/api/history")
-async def get_history(limit: int = 50):
-    return {"predictions": [p.model_dump() for p in ledger.get_recent_predictions(limit=limit)]}
+async def get_history(limit: int = Query(default=50, ge=1, le=500)):
+    predictions = await asyncio.to_thread(ledger.get_recent_predictions, limit)
+    return {"predictions": [p.model_dump() for p in predictions]}
+
+@app.get("/api/prediction-observations")
+async def get_prediction_observations(limit: int = Query(default=100, ge=1, le=1000), contract_ticker: Optional[str] = None):
+    observations = await asyncio.to_thread(ledger.get_recent_prediction_observations, limit, contract_ticker)
+    return {"observations": observations}
 
 @app.get("/api/scoreboard")
 async def get_scoreboard():
-    return ledger.get_scoreboard().model_dump()
+    scoreboard = await asyncio.to_thread(ledger.get_scoreboard)
+    return scoreboard.model_dump()
+
+@app.get("/api/brti-cohorts")
+async def get_brti_cohorts():
+    report = await asyncio.to_thread(ledger.get_brti_cohort_report)
+    return report
 
 @app.get("/api/trades")
-async def get_trades(limit: int = 30):
-    return {"trades": [t.model_dump() for t in ledger.get_recent_trades(limit=limit)]}
+async def get_trades(limit: int = Query(default=30, ge=1, le=200)):
+    trades = await asyncio.to_thread(ledger.get_recent_trades, limit)
+    return {"trades": [t.model_dump() for t in trades]}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    active_clients.add(websocket)
-    if orchestrator.latest_snapshot is not None:
-        await websocket.send_text(orchestrator.latest_snapshot.model_dump_json())
     try:
-        while True: await websocket.receive_text()
+        await _register_websocket(websocket)
+        while True:
+            await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         active_clients.discard(websocket)
+        pending_ws_payloads.pop(websocket, None)
+        sender_task = ws_send_tasks.pop(websocket, None)
+        if sender_task is not None and not sender_task.done():
+            sender_task.cancel()
+            await asyncio.gather(sender_task, return_exceptions=True)
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -107,6 +247,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .timers { display:flex; gap:16px; align-items:center; } .timer-box { text-align:right; }
   .big-val { font-size:1.65rem; font-weight:800; font-variant-numeric:tabular-nums; }
   .cp-val { font-size:1.15rem; font-weight:700; color:#38bdf8; font-variant-numeric:tabular-nums; }
+  .health-val { font-size:.95rem; font-weight:800; color:var(--wait); font-variant-numeric:tabular-nums; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:12px; margin-bottom:12px; }
   .card { background:linear-gradient(155deg,rgba(24,33,49,.98),rgba(17,24,37,.98)); border:1px solid var(--border); border-radius:12px; padding:16px; box-shadow:0 8px 24px rgba(0,0,0,.16); transition:border-color .18s ease,transform .18s ease; } .card:hover { border-color:#344761; }
   .card h3 { font-size:.75rem; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-bottom:10px; display:flex; justify-content:space-between; }
@@ -121,7 +262,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .kv { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:.84rem; gap:8px; }
   .kv:last-child { border-bottom:none; } .kv span:first-child { color:var(--muted); } .kv span:last-child { font-weight:600; text-align:right; }
   .feed-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
-  .st-LIVE,.st-ACTIVE,.st-ACTIVE_WINDOW { background:var(--up); } .st-FALLBACK,.st-MONITORING { background:var(--wait); } .st-STALE,.st-UNAVAILABLE,.st-DEGRADED_FEED { background:var(--down); }
+  .st-LIVE,.st-ACTIVE,.st-ACTIVE_WINDOW,.st-RUNNING { background:var(--up); } .st-FALLBACK,.st-MONITORING,.st-RESTARTING { background:var(--wait); } .st-STALE,.st-UNAVAILABLE,.st-DEGRADED_FEED,.st-SOURCE_MISMATCH,.st-STOPPED { background:var(--down); }
   table { width:100%; border-collapse:separate; border-spacing:0; font-size:.8rem; } th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); white-space:nowrap; } th { position:sticky; top:0; z-index:2; background:#182234; color:#b9c8dc; font-size:.74rem; text-transform:uppercase; letter-spacing:.04em; } tbody tr:hover { background:rgba(56,189,248,.055); }
   .table-wrap { overflow-x:auto; } .rationale { margin-top:10px; font-size:.82rem; color:#cbd5e1; line-height:1.4; } a.api-link { color:#38bdf8; text-decoration:none; font-weight:600; }
 </style>
@@ -129,7 +270,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
   <div class="header">
     <div><div class="title">SATSIGNAL BTC 15M</div><div class="sub" id="contract-meta">Connecting... | <a class="api-link" href="/docs" target="_blank">API Docs (/docs)</a></div></div>
-    <div class="timers"><div class="timer-box"><div class="cp-val" id="cp-countdown">--:--</div><div class="sub">Checkpoint (3m)</div></div><div class="timer-box"><div class="big-val" id="countdown">--:--</div><div class="sub" id="server-time">Settlement</div></div></div>
+    <div class="timers"><div class="timer-box"><div class="cp-val" id="cp-countdown">--:--</div><div class="sub">Checkpoint (3m)</div></div><div class="timer-box"><div class="big-val" id="countdown">--:--</div><div class="sub" id="server-time">Settlement</div></div><div class="timer-box"><div class="health-val" id="system-health">CHECKING</div><div class="sub" id="market-health">Market data status</div></div></div>
   </div>
   <div class="grid">
     <div class="card">
@@ -180,9 +321,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Protective WAITs</span><span id="sb-waits">0</span></div>
     </div>
     <div class="card"><h3>Live Data Feed Health</h3><div id="feeds-list"></div></div>
+    <div class="card">
+      <h3>Multi-Exchange Reference <span id="mx-status" style="color:var(--wait)">SHADOW / WAITING</span></h3>
+      <div class="kv"><span>Consolidated USD Reference</span><span id="mx-price">Waiting for 2 USD venues</span></div>
+      <div class="kv"><span>Contributing Venues</span><span id="mx-venues">--</span></div>
+      <div class="kv"><span>Individual Venue Health</span><span id="mx-venue-health">--</span></div>
+      <div class="kv"><span>Bid Liquidity (±0.25%)</span><span id="mx-bid-depth">--</span></div>
+      <div class="kv"><span>Ask Liquidity (±0.25%)</span><span id="mx-ask-depth">--</span></div>
+      <div class="kv"><span>Consolidated Imbalance</span><span id="mx-imbalance">--</span></div>
+      <div class="kv"><span>Cross-Venue Aggressor Delta (15s / 60s)</span><span id="mx-flow-delta">--</span></div>
+      <div class="kv"><span>60s Buy / Sell Volume (BTC)</span><span id="mx-flow-volume">--</span></div>
+      <div class="kv"><span>60s Flow Sources</span><span id="mx-flow-sources">--</span></div>
+      <div class="kv"><span>Reference vs Primary Spot</span><span id="mx-primary-diff">--</span></div>
+      <div class="kv"><span>Reference vs Official BRTI</span><span id="mx-brti-diff">--</span></div>
+      <div class="kv"><span>Reference vs Contract Strike</span><span id="mx-strike-diff">--</span></div>
+      <div class="rationale" id="mx-method">Independent reference. Does not influence predictions.</div>
+    </div>
+
+  </div>
+  <div class="card" style="margin-bottom:12px;">
+    <h3>Production Storage & Data Integrity <span id="storage-health-status" style="color:var(--wait)">CHECKING</span></h3>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin:0;">
+      <div>
+        <div class="kv"><span>Active Backend</span><span id="storage-backend">--</span></div>
+        <div class="kv"><span>Database File</span><span id="storage-file">--</span></div>
+        <div class="kv"><span>Journal Mode</span><span id="storage-journal">--</span></div>
+      </div>
+      <div>
+        <div class="kv"><span>Integrity Check</span><span id="storage-integrity">--</span></div>
+        <div class="kv"><span>Persistent Volume</span><span id="storage-persistence">--</span></div>
+        <div class="kv"><span>Database Size</span><span id="storage-size">--</span></div>
+      </div>
+      <div>
+        <div class="kv"><span>Prediction Records</span><span id="storage-predictions">--</span></div>
+        <div class="kv"><span>Radar Observations</span><span id="storage-observations">--</span></div>
+        <div class="kv"><span>Paper Trades / Exchange</span><span id="storage-trades-exchange">--</span></div>
+      </div>
+    </div>
+    <div class="rationale" id="storage-note">Live read-only storage diagnostics. This panel does not change the active database or prediction logic.</div>
   </div>
   <div class="card" style="margin-bottom:12px;"><h3>Paper Execution Ledger</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Mode</th><th>Contract</th><th>Side</th><th>Qty</th><th>Entry</th><th>Quote Source</th><th>Fee</th><th>Edge</th><th>Status</th><th>P&L</th></tr></thead><tbody id="trades-body"></tbody></table></div></div>
-  <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
+  <div class="card"><h3>Persistent Prediction History</h3><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Record</th><th>Contract</th><th>Strike</th><th>BTC @ Pred</th><th>Rem</th><th>Main</th><th>Early</th><th>Final</th><th>Prob</th><th>Outcome</th><th>Source</th><th>Result</th></tr></thead><tbody id="history-body"></tbody></table></div></div>
 <script>
   const fmtUSD = (v) => v == null ? "--" : "$" + Number(v).toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
   const sigBadge = (s) => `<span class="badge sig-${s}" style="padding:2px 7px;font-size:.74rem;">${s}</span>`;
@@ -227,12 +406,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("strike-dist").textContent = `${d.evidence.distance_from_strike>=0?"+":""}${d.evidence.distance_from_strike.toFixed(2)} (${d.evidence.distance_pct.toFixed(3)}%)`;
     document.getElementById("regime-val").textContent = d.regime.regime;
     document.getElementById("agreement-val").textContent = d.final.agreement_status;
-    document.getElementById("eng-a").innerHTML = `${sigBadge(d.evidence.signal)} Score ${d.evidence.raw_score}`;
+    document.getElementById("eng-a").innerHTML = `${sigBadge(d.evidence.signal)} Score ${d.evidence.raw_score} · ${d.engines.engine_a_evidence.status}`;
     document.getElementById("eng-b").textContent = `Weakness ${d.weakness.weakness_score}/100`;
     document.getElementById("dot-b").className = `feed-dot st-${d.engines.engine_b_weakness.status}`;
-    document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%)`;
-    document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}%`;
-    document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}%`;
+    document.getElementById("eng-c").textContent = `${d.regime.regime} (>=${d.regime.min_confidence_required}%) · ${d.engines.engine_c_regime.status}`;
+    document.getElementById("eng-d").innerHTML = `${sigBadge(d.early.signal)} ${d.early.confidence}% · ${d.engines.engine_d_early.status}`;
+    document.getElementById("eng-e").innerHTML = `${sigBadge(d.final.signal)} ${d.final.confidence}% · ${d.engines.engine_e_final.status}`;
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
     document.getElementById("buy-bar").style.width = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-bar").style.width = `${d.evidence.selling_pressure_pct}%`;
@@ -249,13 +428,102 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("sb-early").textContent = `${d.scoreboard.early_wins} / ${d.scoreboard.early_losses} / ${d.scoreboard.early_accuracy_pct}% (${d.scoreboard.early_scored} scored)`;
     document.getElementById("sb-brier").textContent = d.scoreboard.brier_score != null ? d.scoreboard.brier_score.toFixed(4) : "Awaiting settlements";
     document.getElementById("sb-waits").textContent = d.scoreboard.waits_issued;
-    document.getElementById("feeds-list").innerHTML = d.feeds.map(f => `<div class="kv"><span><i class="feed-dot st-${f.status}"></i>${f.name}</span><span>${f.status} ${f.age_seconds!=null?"("+f.age_seconds+"s)":""} — ${f.detail}</span></div>`).join("");
+    renderFeedStatuses(d.feeds);
     document.getElementById("trades-body").innerHTML = (d.recent_trades||[]).map(t => `<tr><td>${t.timestamp_iso.split(" ")[1]}</td><td>${t.mode.toUpperCase()}</td><td>${t.contract_ticker}</td><td>${t.side}</td><td>${t.contracts}</td><td>$${t.entry_price.toFixed(2)}</td><td>${t.quote_source}</td><td>$${t.fee_paid.toFixed(2)}</td><td>+${(t.net_edge*100).toFixed(1)}c</td><td>${t.status}</td><td style="color:${t.pnl_usd>=0?'var(--up)':'var(--down)'};font-weight:700;">${t.pnl_usd>=0?'+':''}$${t.pnl_usd.toFixed(2)}</td></tr>`).join("");
     document.getElementById("history-body").innerHTML = (d.recent_predictions||[]).map(p => {
       let resText = "PENDING";
       if (p.settled) resText = p.final_won===true ? `<span style="color:var(--up);font-weight:700;">WIN</span>` : (p.final_won===false ? `<span style="color:var(--down);font-weight:700;">LOSS</span>` : `<span style="color:var(--wait);">WAIT (not scored)</span>`);
-      return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
+      return `<tr><td>${p.timestamp_iso.split(" ")[1]}</td><td><span class="badge">LOCKED</span></td><td>${p.contract_ticker}</td><td>${fmtUSD(p.strike_price)}</td><td>${fmtUSD(p.btc_price_at_pred)}</td><td>${Math.round(p.seconds_remaining)}s</td><td>${sigBadge(p.main_signal)}</td><td>${sigBadge(p.early_signal)}</td><td>${sigBadge(p.final_signal)}</td><td>${p.confidence.toFixed(1)}%</td><td>${p.actual_outcome||"--"}</td><td>${p.settlement_source||"--"}</td><td>${resText}</td></tr>`;
     }).join("");
+  }
+  async function fetchMultiExchange() {
+    try {
+      const res = await fetch("/api/multi-exchange");
+      if (!res.ok) return;
+      const m = await res.json();
+      const statusEl = document.getElementById("mx-status");
+      statusEl.textContent = m.status + " / SHADOW";
+      statusEl.style.color = m.status === "LIVE" ? "var(--up)" : "var(--wait)";
+      document.getElementById("mx-price").textContent = m.reference_price != null ? fmtUSD(m.reference_price) : "Waiting for 2 USD venues";
+      document.getElementById("mx-venues").textContent = `${(m.included_venues||[]).join(", ")||"--"} (${m.usd_venue_count_live||0}/2 USD feeds)`;
+      document.getElementById("mx-venue-health").textContent = (m.venues||[]).map(v => `${v.venue}: ${v.status}${v.connected ? " [connected]" : ""}${v.age_seconds!=null ? " "+Number(v.age_seconds).toFixed(1)+"s" : ""}`).join(" | ") || "--";
+      document.getElementById("mx-bid-depth").textContent = fmtUSD(m.consolidated_bid_depth_usd_within_25bps||0);
+      document.getElementById("mx-ask-depth").textContent = fmtUSD(m.consolidated_ask_depth_usd_within_25bps||0);
+      document.getElementById("mx-imbalance").textContent = m.consolidated_imbalance == null ? "--" : (m.consolidated_imbalance*100).toFixed(2)+"%";
+      const flow15 = m.trade_flow?.windows?.["15"];
+      const flow60 = m.trade_flow?.windows?.["60"];
+      const deltaFmt = (f) => !f ? "--" : (f.status!=="ACTIVE" ? f.status : ((f.delta_btc>0?"+":"")+Number(f.delta_btc).toFixed(4)+" BTC"));
+      document.getElementById("mx-flow-delta").textContent = deltaFmt(flow15)+" / "+deltaFmt(flow60)+(flow60?.status==="ACTIVE"&&flow60.delta_ratio!=null?" ("+(flow60.delta_ratio*100).toFixed(1)+"%)":"");
+      document.getElementById("mx-flow-volume").textContent = flow60?.status==="ACTIVE" ? Number(flow60.buy_volume_btc||0).toFixed(4)+" / "+Number(flow60.sell_volume_btc||0).toFixed(4) : (flow60?.status||"--");
+      document.getElementById("mx-flow-sources").textContent = flow60?.source_venues?.join(", ") || "--";
+      document.getElementById("mx-primary-diff").textContent = m.reference_vs_primary_bps == null ? "--" : (m.reference_vs_primary_bps>0?"+":"")+m.reference_vs_primary_bps.toFixed(2)+" bps";
+      document.getElementById("mx-brti-diff").textContent = m.reference_vs_brti_bps == null ? "--" : (m.reference_vs_brti_bps>0?"+":"")+m.reference_vs_brti_bps.toFixed(2)+" bps";
+      document.getElementById("mx-strike-diff").textContent = m.reference_vs_strike_bps == null ? "--" : (m.reference_vs_strike_bps>0?"+":"")+m.reference_vs_strike_bps.toFixed(2)+" bps";
+      document.getElementById("mx-method").textContent = m.method;
+    } catch(e) {}
+  }
+  function renderFeedStatuses(feeds) {
+    if (!Array.isArray(feeds)) return;
+    document.getElementById("feeds-list").innerHTML = feeds.map(f => `<div class="kv"><span><i class="feed-dot st-${f.status}"></i>${f.name}</span><span>${f.status} ${f.age_seconds!=null?"("+Number(f.age_seconds).toFixed(1)+"s)":""} — ${f.detail}</span></div>`).join("");
+  }
+  // Feed telemetry must refresh independently of prediction snapshots. If spot
+  // data stops, the last websocket snapshot may remain unchanged while these
+  // statuses correctly age into STALE/UNAVAILABLE.
+  async function fetchFeeds() {
+    try {
+      const res = await fetch("/api/feeds", {cache:"no-store"});
+      if (!res.ok) return;
+      const payload = await res.json();
+      renderFeedStatuses(payload.feeds);
+    } catch(e) {}
+  }
+  async function fetchOrchestratorHealth() {
+    const systemEl = document.getElementById("system-health");
+    const marketEl = document.getElementById("market-health");
+    try {
+      const res = await fetch("/api/orchestrator/health", {cache:"no-store"});
+      if (!res.ok) throw new Error("Health endpoint unavailable");
+      const h = await res.json();
+      systemEl.textContent = h.health || "UNKNOWN";
+      systemEl.style.color = h.health === "HEALTHY" ? "var(--up)" : (h.health === "DEGRADED" || h.health === "STOPPED" ? "var(--down)" : "var(--wait)");
+      marketEl.textContent = h.market_data_health === "READY" ? "MARKET DATA READY" : "MARKET DATA DEGRADED";
+      marketEl.style.color = h.market_data_health === "READY" ? "var(--up)" : "var(--wait)";
+    } catch(e) {
+      systemEl.textContent = "UNAVAILABLE";
+      systemEl.style.color = "var(--down)";
+      marketEl.textContent = "Health check not responding";
+      marketEl.style.color = "var(--wait)";
+    }
+  }
+  async function fetchStorageHealth() {
+    const statusEl = document.getElementById("storage-health-status");
+    const set = (id, value) => { document.getElementById(id).textContent = value == null ? "--" : String(value); };
+    try {
+      const res = await fetch("/api/storage/health", {cache:"no-store"});
+      if (!res.ok) throw new Error("Storage health endpoint unavailable");
+      const h = await res.json();
+      const counts = h.record_counts || {};
+      const persistent = h.persistent_storage || {};
+      const healthy = h.status === "HEALTHY" && (h.storage_type === "POSTGRESQL" ? h.connection_check === "ok" : h.integrity_check === "ok");
+      statusEl.textContent = h.status || "UNKNOWN";
+      statusEl.style.color = healthy ? "var(--up)" : "var(--down)";
+      set("storage-backend", h.provider === "SUPABASE" ? "SUPABASE / POSTGRESQL" : (h.storage_type || "UNKNOWN"));
+      set("storage-file", "NOT APPLICABLE");
+      set("storage-journal", h.journal_mode || "--");
+      set("storage-integrity", h.integrity_check || "--");
+      set("storage-persistence", h.provider === "SUPABASE" ? "SUPABASE MANAGED" : "UNAVAILABLE");
+      set("storage-size", h.database_size_bytes != null ? (Number(h.database_size_bytes)/1048576).toFixed(2)+" MB" : "--");
+      set("storage-predictions", counts.predictions ?? 0);
+      set("storage-observations", counts.prediction_observations ?? 0);
+      set("storage-trades-exchange", (counts.trades ?? 0)+" / "+(counts.multi_exchange_reference ?? 0));
+      document.getElementById("storage-note").textContent = h.provider === "SUPABASE" && h.connection_check === "ok"
+        ? "Supabase PostgreSQL is active. Connection and ledger record counts are verified."
+        : "Supabase PostgreSQL connection is unavailable. Check the private DATABASE_URL secret and database connectivity.";
+    } catch(e) {
+      statusEl.textContent = "UNAVAILABLE";
+      statusEl.style.color = "var(--down)";
+      document.getElementById("storage-note").textContent = "Storage diagnostics could not be loaded. No storage settings were changed.";
+    }
   }
   async function fetchInitial() { try { const res = await fetch("/api/state"); if (res.ok) updateUI(await res.json()); } catch(e){} }
   function connectWS() {
@@ -265,7 +533,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ws.onmessage = (e) => updateUI(JSON.parse(e.data));
     ws.onclose = () => { wsEl.textContent = "RECONNECTING"; wsEl.style.color = "var(--wait)"; setTimeout(connectWS, 2000); };
   }
-  fetchInitial(); connectWS(); setInterval(tickTimers, 250);
+  function scheduleNoOverlap(fn, intervalMs) {
+    let running = false;
+    const run = async () => {
+      if (running) return;
+      running = true;
+      try { await fn(); } finally { running = false; }
+    };
+    run();
+    setInterval(run, intervalMs);
+  }
+  fetchInitial();
+  connectWS();
+  setInterval(tickTimers, 250);
+  scheduleNoOverlap(fetchFeeds, 10000);
+  scheduleNoOverlap(fetchMultiExchange, 10000);
+  scheduleNoOverlap(fetchOrchestratorHealth, 10000);
+  scheduleNoOverlap(fetchStorageHealth, 30000);
 </script>
 </body>
 </html>"""

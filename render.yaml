@@ -6,6 +6,5 @@ services:
     envVars:
       - key: TRADING_MODE
         value: paper
-      - key: PREDICTOR_DB_PATH
-        value: /data/satsignal_btc15m.db
     healthCheckPath: /api/health
+    # Set DATABASE_URL as a private secret in the hosting dashboard.
