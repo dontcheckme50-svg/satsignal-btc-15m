@@ -546,6 +546,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       wsEl.style.color = "var(--up)";
     };
     ws.onmessage = (e) => {
+      if (activeSocket !== ws) return;
       try { updateUI(JSON.parse(e.data)); }
       catch(err) { console.warn("Ignoring malformed WebSocket update", err); }
     };
