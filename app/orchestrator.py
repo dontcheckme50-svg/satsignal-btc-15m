@@ -3,10 +3,10 @@ from typing import Callable, List, Optional
 from scipy.stats import norm
 from app.config import settings
 from app.database import PredictionLedger
-from app.engines import EarlyPredictionEngine, EvidenceEngine, FinalDecisionEngine, RegimeEngine, WeaknessEngine
+from app.engines import EarlyPredictionEngine, EvidenceEngine, FinalDecisionEngine, ForecastEngine, RegimeEngine, WeaknessEngine
 from app.execution import ExecutionManager
 from app.feeds import MarketDataHub, iso_now, safe_age_seconds
-from app.models import ContractInfo, DashboardSnapshot, EngineStatusSummary, PredictionRecord, Signal
+from app.models import ContractInfo, DashboardSnapshot, EngineStatusSummary, ForecastReport, PredictionRecord, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class PredictorOrchestrator:
         self.regime_engine = RegimeEngine()
         self.early_engine = EarlyPredictionEngine()
         self.final_engine = FinalDecisionEngine()
+        self.forecast_engine = ForecastEngine()
         self.active_contract: Optional[ContractInfo] = None
         # A directional lock requires two consecutive one-second decisions
         # for the same official contract and direction.
@@ -205,6 +206,7 @@ class PredictorOrchestrator:
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
+        forecast = self.forecast_engine.forecast(ev, weakness, new_contract)
         self.latest_baseline_z_prob = float(norm.cdf(EvidenceEngine._strike_z_score(live_price, new_contract.strike_price, new_contract.seconds_remaining, ev.volatility_annualized)))
         if record_to_db and new_contract.is_official_kalshi and (self.last_logged_ts == 0.0 or ts - self.last_logged_ts >= 30.0):
             # Save changing engine state as an observation, not a scored prediction.
@@ -319,9 +321,51 @@ class PredictorOrchestrator:
             engine_c_regime={"status": engine_block_status, "regime": regime.regime.value, "min_confidence_required": regime.min_confidence_required, "chop_index": regime.chop_index, "input_health": engine_input_health},
             engine_d_early={"status": "BLOCKED_STALE_INPUT" if not engine_inputs_fresh else ("ACTIVE_WINDOW" if early.active_window else "MONITORING"), "signal": early.signal.value, "confidence": early.confidence, "input_health": engine_input_health},
             engine_e_final={"status": "BLOCKED_STALE_INPUT" if not engine_inputs_fresh else "ACTIVE", "signal": final.signal.value, "confidence": final.confidence, "agreement": final.agreement_status, "input_health": engine_input_health},
+            engine_f_forecast={"status": engine_block_status, "signal": forecast.signal.value, "confidence": forecast.confidence, "independent": True, "input_health": engine_input_health},
         )
-        self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
+        stored_forecast_lock = self.ledger.get_forecast_lock(new_contract.ticker) if new_contract.is_official_kalshi else None
+        if stored_forecast_lock:
+            forecast = forecast.model_copy(update={
+                "locked": True,
+                "locked_signal": Signal(stored_forecast_lock["signal"]),
+                "locked_at_iso": stored_forecast_lock["timestamp_iso"],
+                "lock_ticker": stored_forecast_lock["contract_ticker"],
+            })
+        self.latest_snapshot = DashboardSnapshot(server_time_iso=iso_now(ts), contract=new_contract, feeds=self.hub.get_feed_statuses(), evidence=ev, weakness=weakness, regime=regime, early=early, final=final, forecast=forecast, engines=engines_summary, scoreboard=self.ledger.get_scoreboard(), recent_predictions=self.ledger.get_recent_predictions(limit=20), recent_trades=self.ledger.get_recent_trades(limit=15))
         return self.latest_snapshot
+
+    def lock_forecast(self) -> dict:
+        """Manually freeze Engine F's current directional forecast for this contract."""
+        snap = self.latest_snapshot
+        if snap is None:
+            raise ValueError("Forecast is not ready yet")
+        if not snap.contract.is_official_kalshi or snap.contract.strike_source != "KALSHI_OFFICIAL":
+            raise ValueError("A manual forecast lock requires an official Kalshi contract")
+        if snap.contract.seconds_remaining <= settings.final_lockout_seconds:
+            raise ValueError("Forecast lock is closed during the final entry cutoff")
+        health = snap.engines.engine_f_forecast.get("input_health", {})
+        if not health.get("fresh"):
+            raise ValueError("Forecast inputs are stale or degraded")
+        if snap.forecast.signal not in (Signal.UP, Signal.DOWN):
+            raise ValueError("Engine F is WAIT; only UP or DOWN forecasts can be locked")
+        row = self.ledger.record_forecast_lock({
+            "contract_ticker": snap.contract.ticker,
+            "timestamp_iso": iso_now(),
+            "epoch_ts": time.time(),
+            "signal": snap.forecast.signal.value,
+            "confidence": snap.forecast.confidence,
+            "up_prob": snap.forecast.up_probability,
+            "down_prob": snap.forecast.down_probability,
+            "strike_price": snap.contract.strike_price,
+            "btc_price_at_lock": snap.evidence.live_price,
+        })
+        snap.forecast = snap.forecast.model_copy(update={
+            "locked": True,
+            "locked_signal": Signal(row["signal"]),
+            "locked_at_iso": row["timestamp_iso"],
+            "lock_ticker": row["contract_ticker"],
+        })
+        return row
 
     def _schedule_settlement_reconciliation(self, current_ticker: str) -> None:
         # Settlement is independent of spot-feed health. Count every worker
