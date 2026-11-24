@@ -26,6 +26,9 @@ class Settings:
     kalshi_key_id: str | None = os.getenv("KALSHI_KEY_ID") or None
     kalshi_private_key: str | None = os.getenv("KALSHI_PRIVATE_KEY") or None
     kalshi_private_key_path: str | None = os.getenv("KALSHI_PRIVATE_KEY_PATH") or None
+    kalshi_private_key_password: str | None = os.getenv("KALSHI_PRIVATE_KEY_PASSWORD") or None
+    kalshi_stale_threshold_sec: float = float(os.getenv("KALSHI_STALE_THRESHOLD_SEC", "10.0"))
+    require_official_brti_for_directional_signals: bool = os.getenv("KALSHI_REQUIRE_OFFICIAL_BRTI", "true").strip().lower() in {"1", "true", "yes", "on"}
     binance_ws_url: str = "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@depth20@100ms"
     coinbase_ws_url: str = "wss://ws-feed.exchange.coinbase.com"
     early_window_seconds: int = 300
