@@ -330,6 +330,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     document.getElementById("countdown").textContent = fmtClock(remaining);
     document.getElementById("cp-countdown").textContent = fmtClock(checkpointRemaining);
   }
+  let forecastLockPending = false;
+  let forecastLockReady = false;
   function updateUI(d) {
     if (!d || !d.contract) return;
     document.getElementById("server-time").textContent = d.server_time_iso;
@@ -372,7 +374,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : "NOT LOCKED";
     const forecastReady = Boolean(d.contract.is_official_kalshi && d.engines.engine_f_forecast?.input_health?.fresh
       && ["UP","DOWN"].includes(forecast.signal) && Number(d.contract.seconds_remaining) > 0 && !forecast.locked);
-    document.getElementById("forecast-lock-button").disabled = !forecastReady;
+    forecastLockReady = forecastReady;
+    document.getElementById("forecast-lock-button").disabled = !forecastReady || forecastLockPending;
     document.getElementById("forecast-lock-button").textContent = forecast.locked ? "Forecast Locked" : "Lock Engine F Forecast";
     document.getElementById("engine-notes").textContent = d.final.agreement_details.join(" • ");
     document.getElementById("buy-pct").textContent = `${d.evidence.buying_pressure_pct}%`; document.getElementById("sell-pct").textContent = `${d.evidence.selling_pressure_pct}%`;
@@ -401,7 +404,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function lockEngineFForecast() {
     const button = document.getElementById("forecast-lock-button");
     const note = document.getElementById("forecast-lock-note");
-    if (button.disabled) return;
+    if (forecastLockPending || button.disabled) return;
+    forecastLockPending = true;
     button.disabled = true;
     note.textContent = "Locking current Engine F forecast...";
     try {
@@ -412,6 +416,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       await fetchInitial();
     } catch (err) {
       note.textContent = err.message || "Could not lock forecast.";
+    } finally {
+      forecastLockPending = false;
+      button.disabled = !forecastLockReady;
     }
   }
   document.getElementById("forecast-lock-button").addEventListener("click", lockEngineFForecast);
