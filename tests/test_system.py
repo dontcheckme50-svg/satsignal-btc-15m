@@ -232,12 +232,16 @@ def test_synthetic_contract_window_is_exactly_15_minutes():
     assert 0.0 < contract.seconds_remaining <= 900.0
 
 
-def test_dashboard_countdown_uses_absolute_contract_timestamps():
+def test_dashboard_countdown_uses_monotonic_server_clock_sync():
     from app.main import DASHBOARD_HTML
 
     assert 'contractCloseEpochMs = Number(d.contract.close_timestamp) * 1000' in DASHBOARD_HTML
     assert 'setInterval(tickTimers, 250)' in DASHBOARD_HTML
-    assert 'Date.now() + serverClockOffsetMs' in DASHBOARD_HTML
+    assert 'serverClockAnchorEpochMs + (performance.now() - serverClockAnchorPerfMs)' in DASHBOARD_HTML
+    assert 'fetch("/api/time", {cache:"no-store"})' in DASHBOARD_HTML
+    assert "serverClockOffsetMs" not in DASHBOARD_HTML
+    assert 'document.getElementById("forecast-badge")' in DASHBOARD_HTML
+    assert 'Lock Engine F Forecast' in DASHBOARD_HTML
 
 
 @pytest.mark.asyncio
