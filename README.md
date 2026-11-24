@@ -9,19 +9,21 @@ A FastAPI monitoring and prediction service for BTC 15-minute Kalshi markets. Th
 - Synthetic fallback windows are dashboard-only and cannot generate paper trades or enter the official prediction scoreboard.
 - The scoreboard counts one official prediction lock per contract. Live engine snapshots are stored separately as observations and never inflate prediction totals. A directional Final Decision must agree on two consecutive one-second evaluations for the same official contract before it locks; WAIT, reversal, or contract rollover resets confirmation. If no confirmed direction exists at the 65-second final-entry cutoff, WAIT is locked. Locks are immutable and settlement grades only the lock.
 - `/api/prediction-observations` returns the separate rolling observation history for analysis (limit 1,000; optional contract ticker filter).
+- `/api/forecast` exposes Engine F and its independent lock state; `POST /api/forecast/lock` manually locks a current, fresh, directional forecast for an official Kalshi contract.
 - Prediction accuracy is based on settled official-contract locks. Pending locks are not wins or losses; WAIT signals are excluded from directional accuracy.
 - Paper-trading P&L is reported separately from prediction accuracy.
 - No prediction strategy is proven profitable. The probabilities are heuristic estimates, not calibrated guarantees.
 
-## Five engines (preserved)
+## Six engines (preserved)
 
 A. Evidence: trade flow, delta/CVD, order-book imbalance, momentum, RSI, volatility, strike distance and structure.
 B. Weakness: stale feeds, absorption, low-volume drift, book/tape conflict and exhaustion.
 C. Regime: stable, shaky or high-risk reversal regime.
 D. Early: opening-window probability estimate.
 E. Final: combines evidence, weakness, regime and early-engine agreement into UP/DOWN/WAIT.
+F. Forecast: independent strike-distance/tape probability with its own immutable manual lock per official contract. F does not modify Engine E's automatic official lock or place trades.
 
-The five-engine architecture is preserved. Reliability work hardens evidence inputs and gates: stale/missing order books degrade the forecast, short startup history is neutral for volume ratio, and a synthetic contract cannot produce an actionable final verdict.
+The six-engine architecture is preserved. Engine F is an independent forecast and its manual per-contract lock is stored separately in Supabase; it does not affect Engine E scoring or execution. Reliability work hardens evidence inputs and gates: stale/missing order books degrade the forecast, short startup history is neutral for volume ratio, and a synthetic contract cannot produce an actionable final verdict.
 
 ## Local run (Windows PowerShell)
 
@@ -87,4 +89,4 @@ $env:TEST_DATABASE_URL = "postgresql://USER:PASSWORD@TEST-HOST:PORT/postgres?ssl
 ```
 
 ### Contract countdown
-The dashboard countdown is calculated from the active contract's absolute `close_timestamp` and a server-clock offset, then refreshed locally four times per second. The synthetic fallback window is aligned to exact UTC 900-second (15-minute) boundaries. The checkpoint timer is derived from the contract open timestamp and the configured 180-second interval.
+The dashboard countdown uses the active contract's absolute `close_timestamp`, a millisecond server-time sync, and a monotonic browser clock. Clock sync is independent of prediction snapshots and the timer refreshes locally four times per second. The synthetic fallback window is aligned to exact UTC 900-second (15-minute) boundaries. The checkpoint timer is derived from the contract open timestamp and the configured 180-second interval.
