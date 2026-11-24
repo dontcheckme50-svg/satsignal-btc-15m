@@ -9,15 +9,18 @@ class PredictionLedger:
 
     def __init__(self, db_path: str | None = None):
         self.database_url = settings.database_url
+        self.db_path = None
+        # Allow import of the dashboard in unconfigured development/test environments.
+        # Any ledger operation still fails explicitly; no local fallback is possible.
+        if self.database_url:
+            self._init_db()
+
+    def _connect(self):
         if not self.database_url:
             raise RuntimeError(
                 "DATABASE_URL must point to the Supabase PostgreSQL database; "
                 "SATSignal will not fall back to local or in-memory storage."
             )
-        self.db_path = None
-        self._init_db()
-
-    def _connect(self):
         from app.postgres_compat import connect
         return connect(self.database_url)
 
