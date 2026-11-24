@@ -1,45 +1,36 @@
-import sqlite3
-from threading import RLock
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from app.config import settings
 from app.models import MarketRegime, PredictionRecord, Scoreboard, Signal, TradeRecord
 
 class PredictionLedger:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self._lock = RLock()
-        # SQLite's :memory: database belongs to one connection. Keep that
-        # connection alive so subsequent ledger operations see the same DB.
-        self._memory_conn = None
-        if db_path == ":memory:":
-            self._memory_conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._memory_conn.row_factory = sqlite3.Row
+    """Persistent ledger backed exclusively by the configured Supabase PostgreSQL database."""
+
+    def __init__(self, db_path: str | None = None):
+        self.database_url = settings.database_url
+        if not self.database_url:
+            raise RuntimeError(
+                "DATABASE_URL must point to the Supabase PostgreSQL database; "
+                "SATSignal will not fall back to local or in-memory storage."
+            )
+        self.db_path = None
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        if self._memory_conn is not None:
-            return self._memory_conn
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+    def _connect(self):
+        from app.postgres_compat import connect
+        return connect(self.database_url)
 
     @contextmanager
     def _connection(self):
-        with self._lock:
-            conn = self._connect()
-            try:
-                yield conn
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                if conn is not self._memory_conn:
-                    conn.close()
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._connection() as conn:
@@ -48,20 +39,20 @@ class PredictionLedger:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     contract_ticker TEXT NOT NULL,
                     timestamp_iso TEXT NOT NULL,
-                    epoch_ts REAL NOT NULL,
-                    strike_price REAL NOT NULL,
-                    btc_price_at_pred REAL NOT NULL,
-                    seconds_remaining REAL NOT NULL,
+                    epoch_ts DOUBLE PRECISION NOT NULL,
+                    strike_price DOUBLE PRECISION NOT NULL,
+                    btc_price_at_pred DOUBLE PRECISION NOT NULL,
+                    seconds_remaining DOUBLE PRECISION NOT NULL,
                     main_signal TEXT NOT NULL,
                     early_signal TEXT NOT NULL,
                     final_signal TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    up_prob REAL NOT NULL,
-                    down_prob REAL NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    up_prob DOUBLE PRECISION NOT NULL,
+                    down_prob DOUBLE PRECISION NOT NULL,
                     regime TEXT NOT NULL,
                     settled INTEGER NOT NULL DEFAULT 0,
                     settlement_source TEXT,
-                    settlement_price REAL,
+                    settlement_price DOUBLE PRECISION,
                     actual_outcome TEXT,
                     final_won INTEGER,
                     main_won INTEGER,
@@ -74,13 +65,13 @@ class PredictionLedger:
                     timestamp_iso TEXT NOT NULL,
                     side TEXT NOT NULL,
                     contracts INTEGER NOT NULL,
-                    entry_price REAL NOT NULL,
+                    entry_price DOUBLE PRECISION NOT NULL,
                     quote_source TEXT NOT NULL DEFAULT 'KALSHI_LIVE_BOOK',
-                    fee_paid REAL NOT NULL,
-                    fair_prob_at_entry REAL NOT NULL,
-                    net_edge REAL NOT NULL,
+                    fee_paid DOUBLE PRECISION NOT NULL,
+                    fair_prob_at_entry DOUBLE PRECISION NOT NULL,
+                    net_edge DOUBLE PRECISION NOT NULL,
                     status TEXT NOT NULL,
-                    pnl_usd REAL NOT NULL DEFAULT 0.0,
+                    pnl_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0,
                     notes TEXT NOT NULL DEFAULT '',
                     settled_at TEXT
                 );
