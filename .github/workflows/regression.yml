@@ -8,6 +8,7 @@ on:
       - memory-ledger-transfer
       - reliability-isolation-v1
       - hostless-runtime-reliability-prod-v1
+      - fix/supabase-clock-sync-and-engine-f-v1
   pull_request:
     branches:
       - main
