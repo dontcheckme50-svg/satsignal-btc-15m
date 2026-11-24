@@ -57,23 +57,23 @@ class PredictionLedger:
         with self._connection() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS predictions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id BIGSERIAL PRIMARY KEY,
                     contract_ticker TEXT NOT NULL,
                     timestamp_iso TEXT NOT NULL,
-                    epoch_ts REAL NOT NULL,
-                    strike_price REAL NOT NULL,
-                    btc_price_at_pred REAL NOT NULL,
-                    seconds_remaining REAL NOT NULL,
+                    epoch_ts DOUBLE PRECISION NOT NULL,
+                    strike_price DOUBLE PRECISION NOT NULL,
+                    btc_price_at_pred DOUBLE PRECISION NOT NULL,
+                    seconds_remaining DOUBLE PRECISION NOT NULL,
                     main_signal TEXT NOT NULL,
                     early_signal TEXT NOT NULL,
                     final_signal TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    up_prob REAL NOT NULL,
-                    down_prob REAL NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    up_prob DOUBLE PRECISION NOT NULL,
+                    down_prob DOUBLE PRECISION NOT NULL,
                     regime TEXT NOT NULL,
                     settled INTEGER NOT NULL DEFAULT 0,
                     settlement_source TEXT,
-                    settlement_price REAL,
+                    settlement_price DOUBLE PRECISION,
                     actual_outcome TEXT,
                     final_won INTEGER,
                     main_won INTEGER,
@@ -84,51 +84,51 @@ class PredictionLedger:
                     spot_side_at_lock TEXT
                 );
                 CREATE TABLE IF NOT EXISTS prediction_observations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id BIGSERIAL PRIMARY KEY,
                     contract_ticker TEXT NOT NULL,
-                    epoch_ts REAL NOT NULL,
-                    seconds_remaining REAL NOT NULL,
+                    epoch_ts DOUBLE PRECISION NOT NULL,
+                    seconds_remaining DOUBLE PRECISION NOT NULL,
                     payload_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id BIGSERIAL PRIMARY KEY,
                     mode TEXT NOT NULL,
                     contract_ticker TEXT NOT NULL,
                     timestamp_iso TEXT NOT NULL,
                     side TEXT NOT NULL,
                     contracts INTEGER NOT NULL,
-                    entry_price REAL NOT NULL,
+                    entry_price DOUBLE PRECISION NOT NULL,
                     quote_source TEXT NOT NULL DEFAULT 'KALSHI_LIVE_BOOK',
-                    fee_paid REAL NOT NULL,
-                    fair_prob_at_entry REAL NOT NULL,
-                    net_edge REAL NOT NULL,
+                    fee_paid DOUBLE PRECISION NOT NULL,
+                    fair_prob_at_entry DOUBLE PRECISION NOT NULL,
+                    net_edge DOUBLE PRECISION NOT NULL,
                     status TEXT NOT NULL,
-                    pnl_usd REAL NOT NULL DEFAULT 0.0,
+                    pnl_usd DOUBLE PRECISION NOT NULL DEFAULT 0.0,
                     notes TEXT NOT NULL DEFAULT '',
                     settled_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS multi_exchange_reference (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    epoch_ts REAL NOT NULL,
+                    id BIGSERIAL PRIMARY KEY,
+                    epoch_ts DOUBLE PRECISION NOT NULL,
                     contract_ticker TEXT NOT NULL,
-                    strike_price REAL,
-                    primary_spot_price REAL,
-                    primary_spot_age_seconds REAL,
-                    official_brti_price REAL,
-                    official_brti_age_seconds REAL,
-                    reference_price REAL,
+                    strike_price DOUBLE PRECISION,
+                    primary_spot_price DOUBLE PRECISION,
+                    primary_spot_age_seconds DOUBLE PRECISION,
+                    official_brti_price DOUBLE PRECISION,
+                    official_brti_age_seconds DOUBLE PRECISION,
+                    reference_price DOUBLE PRECISION,
                     reference_status TEXT NOT NULL,
                     usd_venue_count INTEGER NOT NULL DEFAULT 0,
                     included_venues_json TEXT NOT NULL DEFAULT '[]',
                     outlier_venues_json TEXT NOT NULL DEFAULT '[]',
                     venues_json TEXT NOT NULL DEFAULT '[]',
-                    bid_depth_25bps REAL,
-                    ask_depth_25bps REAL,
-                    imbalance REAL,
-                    ref_vs_primary_bps REAL,
-                    ref_vs_brti_bps REAL,
-                    primary_vs_brti_bps REAL,
-                    reference_vs_strike_bps REAL
+                    bid_depth_25bps DOUBLE PRECISION,
+                    ask_depth_25bps DOUBLE PRECISION,
+                    imbalance DOUBLE PRECISION,
+                    ref_vs_primary_bps DOUBLE PRECISION,
+                    ref_vs_brti_bps DOUBLE PRECISION,
+                    primary_vs_brti_bps DOUBLE PRECISION,
+                    reference_vs_strike_bps DOUBLE PRECISION
                 );
                 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(contract_ticker);
                 CREATE INDEX IF NOT EXISTS idx_pred_settled ON predictions(settled);
@@ -137,7 +137,7 @@ class PredictionLedger:
                 CREATE INDEX IF NOT EXISTS idx_multi_ref_epoch ON multi_exchange_reference(epoch_ts);
                 CREATE INDEX IF NOT EXISTS idx_multi_ref_contract ON multi_exchange_reference(contract_ticker);
             """)
-            prediction_columns = {row["name"] for row in conn.execute("PRAGMA table_info(predictions)").fetchall()}
+            prediction_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("predictions",)).fetchall()}
             if "brti_cohort" not in prediction_columns:
                 conn.execute("ALTER TABLE predictions ADD COLUMN brti_cohort TEXT NOT NULL DEFAULT 'UNKNOWN'")
             if "brti_side_at_lock" not in prediction_columns:
@@ -158,16 +158,16 @@ class PredictionLedger:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_official_prediction_per_contract
                 ON predictions(contract_ticker) WHERE is_official_lock = 1
             """)
-            trade_columns = {row["name"] for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
+            trade_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("trades",)).fetchall()}
             if "settled_at" not in trade_columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN settled_at TEXT")
-            reference_columns = {row["name"] for row in conn.execute("PRAGMA table_info(multi_exchange_reference)").fetchall()}
+            reference_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("multi_exchange_reference",)).fetchall()}
             if "primary_spot_age_seconds" not in reference_columns:
-                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN primary_spot_age_seconds REAL")
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN primary_spot_age_seconds DOUBLE PRECISION")
             if "official_brti_age_seconds" not in reference_columns:
-                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN official_brti_age_seconds REAL")
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN official_brti_age_seconds DOUBLE PRECISION")
             if "reference_vs_strike_bps" not in reference_columns:
-                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN reference_vs_strike_bps REAL")
+                conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN reference_vs_strike_bps DOUBLE PRECISION")
 
 
     def get_storage_health(self) -> dict:
@@ -254,12 +254,12 @@ class PredictionLedger:
         """Persist the one official scored prediction for a contract, idempotently."""
         with self._connection() as conn:
             cur = conn.execute(
-                """INSERT OR IGNORE INTO predictions (
+                """INSERT INTO predictions (
                     contract_ticker, timestamp_iso, epoch_ts, strike_price,
                     btc_price_at_pred, seconds_remaining, main_signal, early_signal,
                     final_signal, confidence, up_prob, down_prob, regime, is_official_lock,
                     brti_cohort, brti_side_at_lock, spot_side_at_lock
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?) ON CONFLICT DO NOTHING""",
                 (rec.contract_ticker, rec.timestamp_iso, rec.epoch_ts, rec.strike_price,
                  rec.btc_price_at_pred, rec.seconds_remaining, rec.main_signal.value,
                  rec.early_signal.value, rec.final_signal.value, rec.confidence,
