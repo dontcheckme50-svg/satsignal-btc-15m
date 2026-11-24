@@ -19,6 +19,20 @@ from app.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_dedicated_test_database():
+    """Keep integration assertions repeatable; TEST_DATABASE_URL must be a disposable test project."""
+    if not os.getenv("TEST_DATABASE_URL"):
+        return
+    from app.postgres_compat import connect
+    conn = connect(os.environ["TEST_DATABASE_URL"])
+    try:
+        conn.execute("TRUNCATE TABLE predictions, trades RESTART IDENTITY CASCADE")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _contract(**overrides):
     values = dict(
         ticker="KXBTC15M-TEST",
@@ -208,7 +222,7 @@ def test_scoreboard_tracks_pending_and_each_engine_accuracy(tmp_path):
 def test_synthetic_contract_window_is_exactly_15_minutes():
     from app.orchestrator import PredictorOrchestrator
 
-    ledger = PredictionLedger(":memory:")
+    ledger = PredictionLedger()
     hub = MarketDataHub()
     orchestrator = PredictorOrchestrator(hub, ledger)
     now = 1794873675.25
