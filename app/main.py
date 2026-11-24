@@ -11,7 +11,7 @@ from app.models import DashboardSnapshot
 from app.orchestrator import PredictorOrchestrator
 
 hub = MarketDataHub()
-ledger = PredictionLedger(settings.db_path)
+ledger = PredictionLedger()
 orchestrator = PredictorOrchestrator(hub, ledger)
 active_clients: Set[WebSocket] = set()
 pending_ws_payloads: dict[WebSocket, str] = {}
