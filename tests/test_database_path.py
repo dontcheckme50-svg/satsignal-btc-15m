@@ -1,14 +1,15 @@
 from app.database import PredictionLedger
 
 
-def test_ledger_creates_missing_database_parent_directory(tmp_path):
-    database_path = tmp_path / "nested" / "state" / "satsignal.db"
+def test_ledger_uses_supabase_postgres_without_local_database_path():
+    ledger = PredictionLedger()
 
-    ledger = PredictionLedger(str(database_path))
-
-    assert database_path.is_file()
+    assert ledger.database_url.startswith(("postgres://", "postgresql://"))
+    assert not hasattr(ledger, "db_path")
     health = ledger.get_storage_health()
     assert health["status"] == "HEALTHY"
+    assert health["storage_type"] == "POSTGRESQL"
+    assert health["provider"] == "SUPABASE"
     assert health["record_counts"] == {
         "predictions": 0,
         "prediction_observations": 0,
