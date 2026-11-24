@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy.stats import norm
 from app.config import settings
-from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, MarketRegime, RegimeReport, Signal, WeaknessReport
+from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, ForecastReport, MarketRegime, RegimeReport, Signal, WeaknessReport
 
 class EvidenceEngine:
     def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
@@ -238,6 +238,40 @@ class EarlyPredictionEngine:
             active_window=in_early_window, signal=sig, confidence=confidence,
             up_prob=up_prob, down_prob=down_prob, rationale=rationale
         )
+
+
+class ForecastEngine:
+    """Independent Engine F forecast; it does not create the official Engine E lock."""
+    def forecast(self, ev: EvidenceMetrics, weakness: WeaknessReport, contract: ContractInfo) -> ForecastReport:
+        z = (
+            float(ev.strike_z_score)
+            if ev.strike_z_score is not None and math.isfinite(float(ev.strike_z_score))
+            else EvidenceEngine._strike_z_score(
+                ev.live_price, contract.strike_price,
+                contract.seconds_remaining, ev.volatility_annualized,
+            )
+        )
+        # A separate, transparent blend: terminal strike-distance signal plus
+        # current tape score, then shrink toward neutral as weakness rises.
+        raw = 0.65 * z + 0.35 * (float(ev.raw_score) / 100.0)
+        probability = float(np.clip(norm.cdf(raw), 0.02, 0.98))
+        shrink = min(0.75, max(0.0, float(weakness.weakness_score) / 120.0))
+        up = round(0.5 + (probability - 0.5) * (1.0 - shrink), 4)
+        down = round(1.0 - up, 4)
+        confidence = round(max(up, down) * 100.0, 1)
+        if weakness.feed_degraded:
+            signal, rationale = Signal.WAIT, "WAIT: Engine F inputs are degraded."
+        elif up >= 0.56:
+            signal, rationale = Signal.UP, f"UP ({confidence:.1f}%): independent strike-distance and tape blend."
+        elif up <= 0.44:
+            signal, rationale = Signal.DOWN, f"DOWN ({confidence:.1f}%): independent strike-distance and tape blend."
+        else:
+            signal, rationale = Signal.WAIT, "WAIT: Engine F edge is below its directional threshold."
+        return ForecastReport(
+            signal=signal, confidence=confidence, up_probability=up,
+            down_probability=down, rationale=rationale,
+        )
+
 
 class FinalDecisionEngine:
     def decide(self, ev: EvidenceMetrics, weakness: WeaknessReport, regime: RegimeReport, early: EarlyPredictionReport, contract: ContractInfo, weights: dict) -> FinalDecisionReport:
