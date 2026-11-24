@@ -1,4 +1,4 @@
-import os, sqlite3, json, math, time, threading
+import json, math, time
 import numpy as np
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -22,115 +22,39 @@ def _parse_market_regime(raw):
             ) from None
 
 class PredictionLedger:
-    # Keep high-volume diagnostic history bounded in memory mode. These are
-    # observations/references only; official predictions, settlements and trades
-    # are never pruned by this policy.
-    MEMORY_OBSERVATION_RETENTION = 5000
-    MEMORY_REFERENCE_RETENTION = 1000
-    MEMORY_PRUNE_EVERY_WRITES = 100
+    """Prediction and trade ledger backed exclusively by Supabase PostgreSQL."""
 
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.database_url = getattr(settings, "database_url", None)
+    def __init__(self):
+        self.database_url = settings.database_url
+        if not self.database_url:
+            raise RuntimeError(
+                "DATABASE_URL is required. SATSIGNAL will not fall back to local or in-memory storage."
+            )
         self._engine_weights_cache = None
         self._engine_weights_cache_ts = 0.0
-        # SQLite :memory: databases exist only for the lifetime of one connection.
-        # Keep one connection and serialize its use so every ledger method sees the
-        # same schema/state and transaction boundaries remain safe across threads.
-        self._memory_connection = None
-        self._memory_lock = threading.RLock()
-        self._history_writes_since_prune = 0
-        if not self.database_url and self._is_memory_path():
-            self._memory_connection = sqlite3.connect(
-                self.db_path, timeout=15.0, check_same_thread=False, uri=self.db_path.startswith("file:")
-            )
-            self._memory_connection.row_factory = sqlite3.Row
-            self._memory_connection.execute("PRAGMA busy_timeout=15000;")
-            self._memory_connection.execute("PRAGMA synchronous=NORMAL;")
-        # SQLite cannot create missing parent directories. Host deployments may
-        # provide a nested PREDICTOR_DB_PATH (for example /data/state/ledger.db),
-        # so create that directory before the first connection attempt. Do not
-        # touch SQLite URI paths or in-memory databases.
-        if not self.database_url and self.db_path != ":memory:" and not self.db_path.startswith("file:"):
-            parent = os.path.dirname(os.path.abspath(self.db_path))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
         self._init_db()
 
     def _connect(self):
-        # A configured managed database is authoritative; never silently fall
-        # back to ephemeral SQLite when PostgreSQL is unavailable.
-        if self.database_url:
-            from app.postgres_compat import connect
-            return connect(self.database_url)
-        if self._memory_connection is not None:
-            return self._memory_connection
-        conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False, uri=self.db_path.startswith("file:"))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=15000;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
-
-    def _is_memory_path(self) -> bool:
-        return self.db_path == ":memory:" or ("mode=memory" in self.db_path and self.db_path.startswith("file:"))
-
-    def _prune_memory_history(self, conn) -> None:
-        """Periodically cap diagnostic history; never prune scored records or trades."""
-        if self._memory_connection is None:
-            return
-        self._history_writes_since_prune += 1
-        if self._history_writes_since_prune < self.MEMORY_PRUNE_EVERY_WRITES:
-            return
-        self._history_writes_since_prune = 0
-        conn.execute(
-            """DELETE FROM prediction_observations
-               WHERE id NOT IN (
-                   SELECT id FROM prediction_observations ORDER BY id DESC LIMIT ?
-               )""",
-            (self.MEMORY_OBSERVATION_RETENTION,),
-        )
-        conn.execute(
-            """DELETE FROM multi_exchange_reference
-               WHERE id NOT IN (
-                   SELECT id FROM multi_exchange_reference ORDER BY id DESC LIMIT ?
-               )""",
-            (self.MEMORY_REFERENCE_RETENTION,),
-        )
+        from app.postgres_compat import connect
+        return connect(self.database_url)
 
     @contextmanager
     def _connection(self, immediate: bool = False):
-        # A single in-memory connection is shared by all callers. Hold its
-        # reentrant lock for the full transaction, including nested ledger reads.
-        lock = self._memory_lock if self._memory_connection is not None else None
-        if lock is not None:
-            lock.acquire()
         conn = self._connect()
         try:
             if immediate:
-                # Serialize settlement reconciliations per database backend.
-                if self.database_url:
-                    conn.execute("SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))")
-                elif self._memory_connection is None:
-                    conn.execute("BEGIN IMMEDIATE")
-                else:
-                    conn.execute("BEGIN IMMEDIATE")
+                # Serialize settlement reconciliation across workers.
+                conn.execute("SELECT pg_advisory_xact_lock(hashtext('satsignal-settlement'))")
             yield conn
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         finally:
-            if self._memory_connection is not conn:
-                conn.close()
-            if lock is not None:
-                lock.release()
+            conn.close()
 
     def _init_db(self) -> None:
         with self._connection() as conn:
-            # WAL is persistent database state; configure it during initialization,
-            # not on every short-lived read connection.
-            if not self.database_url:
-                conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS predictions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,49 +171,32 @@ class PredictionLedger:
 
 
     def get_storage_health(self) -> dict:
-        """Report connectivity, integrity, and record counts for the selected backend."""
+        """Report the live Supabase PostgreSQL connection and ledger row counts."""
         try:
             with self._connection() as conn:
-                journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
-                integrity_row = conn.execute("PRAGMA quick_check(1)").fetchone()
-                integrity = str(integrity_row[0]) if integrity_row else "UNKNOWN"
+                conn.execute("SELECT 1").fetchone()
                 counts = {}
                 for table in ("predictions", "prediction_observations", "trades", "multi_exchange_reference"):
                     counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            if self.database_url:
-                return {
-                    "status": "HEALTHY",
-                    "storage_type": "POSTGRESQL",
-                    "database_file_exists": None,
-                    "database_size_bytes": None,
-                    "journal_mode": None,
-                    "integrity_check": "not_applicable",
-                    "connection_check": "ok",
-                    "record_counts": counts,
-                }
-            is_memory = self._is_memory_path()
-            file_exists = False if is_memory else os.path.isfile(self.db_path)
-            file_size = os.path.getsize(self.db_path) if file_exists else 0
-            expected_journal_modes = {"MEMORY"} if is_memory else {"WAL"}
-            healthy = integrity == "ok" and journal_mode in expected_journal_modes and (is_memory or file_exists)
             return {
-                "status": "HEALTHY" if healthy else "DEGRADED",
-                "storage_type": "MEMORY" if is_memory else "FILE",
-                "database_file_exists": file_exists,
-                "database_size_bytes": file_size,
-                "journal_mode": journal_mode,
-                "integrity_check": integrity,
+                "status": "HEALTHY",
+                "storage_type": "POSTGRESQL",
+                "provider": "SUPABASE",
+                "database_file_exists": None,
+                "database_size_bytes": None,
+                "journal_mode": None,
+                "integrity_check": "not_applicable",
+                "connection_check": "ok",
                 "record_counts": counts,
             }
         except Exception as exc:
             return {
                 "status": "UNAVAILABLE",
-                "storage_type": "POSTGRESQL" if self.database_url else ("FILE" if self.db_path != ":memory:" else "MEMORY"),
-                "database_file_exists": (
-                    None if self.database_url
-                    else (os.path.isfile(self.db_path) if self.db_path != ":memory:" else False)
-                ),
+                "storage_type": "POSTGRESQL",
+                "provider": "SUPABASE",
+                "database_file_exists": None,
                 "integrity_check": "ERROR",
+                "connection_check": "failed",
                 "error_type": type(exc).__name__,
             }
 
@@ -326,7 +233,6 @@ class PredictionLedger:
                     bps(primary_spot_price, official_brti_price), bps(reference_price, strike_price),
                 ),
             )
-            self._prune_memory_history(conn)
             return int(cur.lastrowid)
 
     def get_multi_exchange_reference_history(self, limit: int = 200) -> List[dict]:
@@ -473,7 +379,6 @@ class PredictionLedger:
                 "INSERT INTO prediction_observations (contract_ticker, epoch_ts, seconds_remaining, payload_json) VALUES (?, ?, ?, ?)",
                 (contract_ticker, epoch_ts, seconds_remaining, json.dumps(payload, default=lambda value: getattr(value, "value", str(value)))),
             )
-            self._prune_memory_history(conn)
             return int(cur.lastrowid)
 
     def get_recent_prediction_observations(self, limit: int = 100, contract_ticker: Optional[str] = None) -> List[dict]:
@@ -510,11 +415,11 @@ class PredictionLedger:
             return int(cur.lastrowid)
 
     def get_unsettled_contract_tickers(self) -> List[str]:
-        # Reconcile both official forecast locks and open paper trades. A trade
-        # can legitimately open before the two-vote forecast lock exists.
+        # Reconcile both official prediction locks and open paper trades.
         # Synthetic proxy contracts must never enter the official queue.
         with self._connection() as conn:
-            pending_sql = """WITH pending AS (
+            rows = conn.execute(
+                """WITH pending AS (
                        SELECT contract_ticker, MIN(epoch_ts) AS first_seen
                        FROM predictions
                        WHERE settled = 0 AND is_official_lock = 1
@@ -523,7 +428,7 @@ class PredictionLedger:
                        UNION ALL
                        SELECT contract_ticker,
                               COALESCE(
-                                  CAST(strftime('%s', substr(MIN(timestamp_iso), 1, 19)) AS REAL),
+                                  EXTRACT(EPOCH FROM MIN(timestamp_iso::timestamptz)),
                                   0.0
                               ) AS first_seen
                        FROM trades
@@ -534,13 +439,8 @@ class PredictionLedger:
                    FROM pending
                    GROUP BY contract_ticker
                    ORDER BY first_seen ASC"""
-            if self.database_url:
-                pending_sql = pending_sql.replace(
-                    "CAST(strftime('%s', substr(MIN(timestamp_iso), 1, 19)) AS REAL)",
-                    "COALESCE(EXTRACT(EPOCH FROM MIN(to_timestamp(timestamp_iso, 'YYYY-MM-DD HH24:MI:SS UTC'))), 0.0)"
-                )
-            rows = conn.execute(pending_sql).fetchall()
-            return [r["contract_ticker"] for r in rows]
+            ).fetchall()
+            return [row["contract_ticker"] for row in rows]
 
     def count_trades_for_ticker(self, contract_ticker: str) -> int:
         with self._connection() as conn:
