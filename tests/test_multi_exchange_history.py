@@ -1,11 +1,8 @@
-import tempfile
-from pathlib import Path
-
 from app.database import PredictionLedger
 
 
 def test_multi_exchange_reference_history_persists_and_calculates_basis(tmp_path):
-    ledger = PredictionLedger(str(tmp_path / "shadow.db"))
+    ledger = PredictionLedger()
     snapshot = {
         "status": "LIVE",
         "reference_price": 90000.0,
