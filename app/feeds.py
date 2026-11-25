@@ -576,8 +576,6 @@ class MarketDataHub:
             brti_status = "UNAVAILABLE"
         elif brti_status == "LIVE" and self.brti_status != "LIVE":
             brti_status = self.brti_status
-        if brti_status == "LIVE" and self._last_brti_source_ts is not None and self._last_brti_source_ts == self._last_brti_value:
-            brti_status = "STALE"
 
         statuses = [
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts > 0 else None, age_seconds=round(spot_age, 2) if spot_age is not None else None, detail=self.active_spot_source),
