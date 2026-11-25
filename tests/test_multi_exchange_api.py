@@ -8,6 +8,8 @@ def test_multi_exchange_shadow_endpoint():
     assert response.status_code == 200
     payload = response.json()
     assert "reference_price" in payload
+    assert payload["benchmark_type"] == "SYNTHETIC_MULTI_EXCHANGE"
+    assert "quality" in payload and "eligible" in payload["quality"]
     assert "venues" in payload
     assert all("status" in venue and "connected" in venue and "age_seconds" in venue for venue in payload["venues"])
     assert "reference_vs_primary_bps" in payload
