@@ -80,3 +80,29 @@ def test_ineligible_or_stale_synthetic_benchmark_is_ignored():
     assert stale.synthetic_benchmark_used is False
     assert ineligible.strike_z_score == baseline.strike_z_score
     assert stale.strike_z_score == baseline.strike_z_score
+
+
+def test_synthetic_benchmark_cannot_outweigh_fresh_official_brti():
+    now = 1_000_000.0
+    contract = _contract(open_timestamp=now - 100.0, seconds_remaining=800.0)
+    engine = EvidenceEngine()
+
+    baseline = engine.analyze(now, 90010.0, contract, [], [], [], [])
+    brti_only = engine.analyze(
+        now, 90010.0, contract, [], [], [], [],
+        official_brti_price=90040.0, official_brti_age_sec=0.5,
+    )
+    both = engine.analyze(
+        now, 90010.0, contract, [], [], [], [],
+        official_brti_price=90040.0, official_brti_age_sec=0.5,
+        synthetic_benchmark_price=90040.0,
+        synthetic_benchmark_age_sec=1.0,
+        synthetic_benchmark_eligible=True,
+    )
+
+    # With both references at the same price, the synthetic addition is only
+    # 10% of the blend; official BRTI's contribution remains 25%.
+    synthetic_increment = both.strike_z_score - brti_only.strike_z_score
+    brti_increment = brti_only.strike_z_score - baseline.strike_z_score
+    assert both.synthetic_benchmark_used is True
+    assert 0.0 < synthetic_increment < brti_increment
