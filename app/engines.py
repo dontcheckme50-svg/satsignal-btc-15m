@@ -59,9 +59,26 @@ class EvidenceEngine:
         )
         brti_distance = (float(official_brti_price) - contract.strike_price) if brti_valid else None
         brti_z = self._strike_z_score(float(official_brti_price), contract.strike_price, contract.seconds_remaining, ann_vol) if brti_valid else None
-        # Spot remains the primary price input; valid official BRTI contributes
-        # an independent settlement-benchmark confirmation, never a fallback.
-        strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
+        synthetic_age = synthetic_benchmark_age_sec
+        synthetic_valid = (
+            synthetic_benchmark_eligible
+            and synthetic_benchmark_price is not None
+            and math.isfinite(float(synthetic_benchmark_price))
+            and float(synthetic_benchmark_price) > 0
+            and synthetic_age is not None
+            and math.isfinite(float(synthetic_age))
+            and 0.0 <= float(synthetic_age) <= 5.0
+        )
+        synthetic_z = self._strike_z_score(float(synthetic_benchmark_price), contract.strike_price, contract.seconds_remaining, ann_vol) if synthetic_valid else None
+        # Spot remains primary; official BRTI retains greater benchmark weight.
+        # The synthetic multi-venue estimate is supplemental only and never
+        # replaces or impersonates the official BRTI feed.
+        if synthetic_z is not None and brti_z is not None:
+            strike_z = 0.65 * spot_z + 0.25 * brti_z + 0.10 * synthetic_z
+        elif synthetic_z is not None:
+            strike_z = 0.80 * spot_z + 0.20 * synthetic_z
+        else:
+            strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
         brti_spread_bps = (
             ((float(official_brti_price) - live_price) / live_price) * 10000.0
             if brti_valid and live_price > 0 else None
