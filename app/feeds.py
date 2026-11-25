@@ -135,7 +135,7 @@ class MarketDataHub:
         if isinstance(self._private_key, ed25519.Ed25519PrivateKey):
             sig = self._private_key.sign(msg)
         else:
-            sig = self._private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
+            sig = self._private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
         return base64.b64encode(sig).decode("utf-8")
 
     def ingest_trade(self, ts: float, price: float, qty: float, is_buyer_maker: bool, source: str) -> bool:
@@ -539,9 +539,14 @@ class MarketDataHub:
                                 else:
                                     self.brti_status = "STALE"
                                     self.brti_detail = "BRTI source value/timestamp has not advanced"
-                        elif resp.status in (401, 403):
-                            self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
-                            return
+                        elif resp.status == 401:
+                            self.brti_status = "UNAVAILABLE"
+                            self.brti_detail = "HTTP 401 authentication failed; verify Kalshi key ID, signature, and clock"
+                            await asyncio.sleep(30.0)
+                        elif resp.status == 403:
+                            self.brti_status = "UNAVAILABLE"
+                            self.brti_detail = "HTTP 403 forbidden; verify CF Benchmarks BRTI entitlement and API-key permissions"
+                            await asyncio.sleep(30.0)
                         else:
                             self.brti_status, self.brti_detail = "UNAVAILABLE", f"HTTP {resp.status}"
                 except asyncio.CancelledError:
