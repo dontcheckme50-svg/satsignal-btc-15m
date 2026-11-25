@@ -160,7 +160,8 @@ class MultiExchangeReference:
             return False
         confirmed = set()
         for channel in channels:
-            if not isinstance(channel, dict) or "BTC-USD" not in channel.get("product_ids", []):
+            product_ids = channel.get("product_ids") if isinstance(channel, dict) else None
+            if not isinstance(product_ids, list) or "BTC-USD" not in product_ids:
                 continue
             confirmed.add(channel.get("name"))
         return {"level2", "matches"}.issubset(confirmed)
