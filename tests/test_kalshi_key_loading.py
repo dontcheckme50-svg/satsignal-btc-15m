@@ -1,6 +1,4 @@
 from types import SimpleNamespace
-
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 
@@ -115,3 +113,22 @@ def test_malformed_inline_key_reports_source_without_exposing_key_contents(monke
     assert hub._private_key is None
     assert "KALSHI_PRIVATE_KEY" in hub.brti_detail
     assert bad_value not in hub.brti_detail
+
+
+def test_prefers_valid_inline_key_when_both_sources_are_configured(monkeypatch, tmp_path):
+    inline_expected, inline_pem = _ed25519_pem()
+    path_expected, path_pem = _ed25519_pem()
+    key_file = tmp_path / "other-kalshi-private-key.pem"
+    key_file.write_bytes(path_pem)
+
+    hub = _hub_with_key_settings(
+        monkeypatch,
+        inline=inline_pem.decode("utf-8"),
+        path=str(key_file),
+    )
+
+    assert isinstance(hub._private_key, ed25519.Ed25519PrivateKey)
+    assert _public_bytes(hub._private_key) == _public_bytes(inline_expected)
+    assert _public_bytes(hub._private_key) != _public_bytes(path_expected)
+    assert hub.brti_detail == "Kalshi private key loaded from KALSHI_PRIVATE_KEY"
+
