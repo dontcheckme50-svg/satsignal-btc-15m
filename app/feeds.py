@@ -79,9 +79,9 @@ class MarketDataHub:
             # Host providers commonly expose multiline PEM values either with
             # real newlines or escaped \\n sequences.
             normalized = (
-                direct_value.lstrip("\\ufeff")
-                .replace("\\\\r\\\\n", "\\n")
-                .replace("\\\\n", "\\n")
+                direct_value.lstrip("\ufeff")
+                .replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
                 .strip()
             )
             candidates.append(("KALSHI_PRIVATE_KEY", normalized.encode("utf-8")))
