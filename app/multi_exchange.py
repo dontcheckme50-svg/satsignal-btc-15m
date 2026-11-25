@@ -493,5 +493,15 @@ class MultiExchangeReference:
             "consolidated_bid_depth_usd_within_25bps": total_bid_depth,
             "consolidated_ask_depth_usd_within_25bps": total_ask_depth,
             "consolidated_imbalance": imbalance,
-            "method": "USD venues only: median outlier filter (0.35%), then capped depth-weighted mid-price; shadow-mode estimate, not CF Benchmarks BRTI. Cross-venue trade-flow volumes are summed observations and may duplicate activity across venues; they are not unique global volume.",
+            "quality": {
+                "eligible": len(accepted) >= 2 and composite is not None,
+                "minimum_venues_met": len(accepted) >= 2,
+                "freshness_max_seconds": 5.0,
+                "agreement_tolerance_pct": 0.35,
+                "accepted_venue_count": len(accepted),
+                "accepted_venue_spread_bps": round((max(v["mid"] for v in accepted) - min(v["mid"] for v in accepted)) / median * 10000.0, 4) if len(accepted) >= 2 and median > 0 else None,
+                "reason": "PASS" if len(accepted) >= 2 and composite is not None else ("INSUFFICIENT_AGREEMENT" if usd_live else "NO_FRESH_USD_VENUES"),
+            },
+            "benchmark_type": "SYNTHETIC_MULTI_EXCHANGE",
+            "method": "Synthetic USD-venue reference: median outlier filter (0.35%), then capped depth-weighted mid-price; never official CF Benchmarks BRTI. Cross-venue trade-flow volumes are summed observations and may duplicate activity across venues; they are not unique global volume.",
         }
