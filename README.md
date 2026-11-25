@@ -48,9 +48,9 @@ Supabase PostgreSQL is the only supported persistence backend. Set `DATABASE_URL
 - Kalshi polling accepts only currently active KXBTC15M markets with a valid official `floor_strike`.
 - Official CF Benchmarks BRTI is accepted only from a valid, source-timestamped, fresh Kalshi pass-through response. The documented CF payload array is parsed using its source event time; stale, future-dated, malformed, and repeat-of-previous values are excluded. When fresh, BRTI contributes an independent 35% component to the Evidence Engine's strike-distance Z-score while primary spot retains 65%; a material spot/BRTI disagreement across the Kalshi strike adds a weakness penalty. BRTI is never replaced by Binance or another exchange. Missing entitlement leaves the BRTI component inactive rather than fabricating a value.
 
-## Multi-exchange reference (shadow mode)
+## SATSIGNAL Synthetic Benchmark (guarded supplemental mode)
 
-A read-only shadow market-data layer runs independently of the five prediction engines:
+The multi-exchange layer builds a clearly labeled synthetic BTC reference from independent public venues. It is **not official CF Benchmarks BRTI** and cannot replace or impersonate that feed.
 
 - Coinbase BTC/USD Level 2 book and matches stream.
 - Kraken BTC/USD book and trades WebSocket.
