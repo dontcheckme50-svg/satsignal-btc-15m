@@ -151,6 +151,22 @@ class MultiExchangeReference:
         self._tasks = []
 
     @staticmethod
+    def _coinbase_subscription_confirmed(message: dict) -> bool:
+        """Return true only after Coinbase confirms both requested BTC-USD channels."""
+        if not isinstance(message, dict) or message.get("type") != "subscriptions":
+            return False
+        channels = message.get("channels")
+        if not isinstance(channels, list):
+            return False
+        confirmed = set()
+        for channel in channels:
+            product_ids = channel.get("product_ids") if isinstance(channel, dict) else None
+            if not isinstance(product_ids, list) or "BTC-USD" not in product_ids:
+                continue
+            confirmed.add(channel.get("name"))
+        return {"level2", "matches"}.issubset(confirmed)
+
+    @staticmethod
     def _coinbase_aggressor_side(maker_side: str) -> str:
         maker_side = str(maker_side or "").lower()
         if maker_side == "buy":
@@ -244,15 +260,22 @@ class MultiExchangeReference:
             try:
                 async with websockets.connect(url, ping_interval=20, open_timeout=10, close_timeout=5) as ws:
                     await ws.send(json.dumps(subscribe))
-                    self.coinbase.connected = True
-                    self.coinbase.last_error = None
+                    self.coinbase.connected = False
+                    self.coinbase.last_error = "Awaiting Coinbase subscription confirmation"
                     async for raw in ws:
                         if not self._running:
                             break
                         msg = json.loads(raw)
                         now = time.time()
                         typ = msg.get("type")
-                        if typ == "snapshot" and msg.get("product_id") == "BTC-USD":
+                        if typ == "subscriptions":
+                            if not self._coinbase_subscription_confirmed(msg):
+                                raise RuntimeError("Coinbase subscription confirmation missing BTC-USD level2/matches")
+                            self.coinbase.connected = True
+                            self.coinbase.last_error = None
+                        elif typ == "error":
+                            raise RuntimeError(f"Coinbase protocol error: {msg.get('message') or msg}")
+                        elif typ == "snapshot" and msg.get("product_id") == "BTC-USD":
                             self.coinbase.bids.clear()
                             self.coinbase.asks.clear()
                             valid_levels = 0
