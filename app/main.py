@@ -368,7 +368,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="card"><h3>Live Data Feed Health</h3><div id="feeds-list"></div></div>
     <div class="card">
-      <h3>Multi-Exchange Reference <span id="mx-status" style="color:var(--wait)">SHADOW / WAITING</span></h3>
+      <h3>Synthetic Benchmark <span id="mx-status" style="color:var(--wait)">WAITING</span></h3>
+      <div class="kv"><span>Benchmark quality / prediction use</span><span id="mx-quality">Waiting for 2 agreeing USD venues</span></div>
       <div class="kv"><span>Consolidated USD Reference</span><span id="mx-price">Waiting for 2 USD venues</span></div>
       <div class="kv"><span>Contributing Venues</span><span id="mx-venues">--</span></div>
       <div class="kv"><span>Individual Venue Health</span><span id="mx-venue-health">--</span></div>
