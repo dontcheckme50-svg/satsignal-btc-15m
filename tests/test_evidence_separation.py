@@ -97,14 +97,14 @@ def test_synthetic_benchmark_cannot_outweigh_fresh_official_brti():
     both = engine.analyze(
         now, 89000.0, contract, [], [], [], [],
         official_brti_price=91000.0, official_brti_age_sec=0.5,
-        synthetic_benchmark_price=91000.0,
+        synthetic_benchmark_price=87000.0,
         synthetic_benchmark_age_sec=1.0,
         synthetic_benchmark_eligible=True,
     )
 
-    # Both references agree; the synthetic contribution is 10% of the blend
-    # while official BRTI's contribution remains 25%.
-    synthetic_increment = both.strike_z_score - brti_only.strike_z_score
-    brti_increment = brti_only.strike_z_score - baseline.strike_z_score
+    # Give the synthetic reference a deliberately opposing value so its
+    # 10% weight is measurable; official BRTI retains 25% weight.
+    synthetic_increment = abs(both.strike_z_score - brti_only.strike_z_score)
+    brti_increment = abs(brti_only.strike_z_score - baseline.strike_z_score)
     assert both.synthetic_benchmark_used is True
     assert 0.0 < synthetic_increment < brti_increment
