@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Deque, List, Optional, Tuple
 import aiohttp, websockets
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, padding
+from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 from app.config import settings
 from app.models import ContractInfo, FeedStatus
 from app.multi_exchange import MultiExchangeReference
@@ -62,22 +62,73 @@ class MarketDataHub:
         self._last_brti_source_ts = None
 
     def _load_kalshi_key(self):
+        """Load a Kalshi RSA or Ed25519 key from either supported secret source.
+
+        Prefer KALSHI_PRIVATE_KEY when valid, but fall back to
+        KALSHI_PRIVATE_KEY_PATH if the inline value is absent or malformed.
+        This is important when a stale/placeholder inline secret coexists with
+        a valid mounted PEM file.
+        """
         if not settings.kalshi_key_id:
+            self.brti_detail = "KALSHI_KEY_ID is not configured"
             return None
 
-        try:
-            if settings.kalshi_private_key:
-                pem_data = settings.kalshi_private_key.replace("\\n", "\n").encode("utf-8")
-            elif settings.kalshi_private_key_path:
-                with open(settings.kalshi_private_key_path, "rb") as f:
-                    pem_data = f.read()
+        candidates = []
+        direct_value = settings.kalshi_private_key
+        if isinstance(direct_value, str) and direct_value.strip():
+            # Host providers commonly expose multiline PEM values either with
+            # real newlines or escaped \\n sequences.
+            normalized = (
+                direct_value.lstrip("\ufeff")
+                .replace("\\r\\n", "\n")
+                .replace("\\n", "\n")
+                .strip()
+            )
+            candidates.append(("KALSHI_PRIVATE_KEY", normalized.encode("utf-8")))
+
+        key_path = settings.kalshi_private_key_path
+        if isinstance(key_path, str) and key_path.strip():
+            try:
+                with open(key_path.strip(), "rb") as key_file:
+                    candidates.append(("KALSHI_PRIVATE_KEY_PATH", key_file.read()))
+            except Exception as exc:
+                candidates.append((
+                    "KALSHI_PRIVATE_KEY_PATH",
+                    None,
+                ))
+                path_error = f"{type(exc).__name__}: {exc}"
             else:
-                return None
+                path_error = None
+        else:
+            path_error = None
 
-            return serialization.load_pem_private_key(pem_data, password=None)
-        except Exception as e:
-            self.brti_detail = f"Key load error: {e}"
+        if not candidates:
+            self.brti_detail = (
+                "Kalshi private key is not configured; set KALSHI_PRIVATE_KEY "
+                "or KALSHI_PRIVATE_KEY_PATH"
+            )
             return None
+
+        errors = []
+        if path_error:
+            errors.append(f"KALSHI_PRIVATE_KEY_PATH: {path_error}")
+
+        for source, pem_data in candidates:
+            if pem_data is None:
+                continue
+            try:
+                key = serialization.load_pem_private_key(pem_data, password=None)
+                if not isinstance(key, (ed25519.Ed25519PrivateKey, rsa.RSAPrivateKey)):
+                    raise TypeError("unsupported key type; expected Ed25519 or RSA")
+                self.brti_detail = f"Kalshi private key loaded from {source}"
+                return key
+            except Exception as exc:
+                # Do not include key material in diagnostics. Source and parser
+                # error are sufficient to diagnose format/algorithm failures.
+                errors.append(f"{source}: {type(exc).__name__}: {exc}")
+
+        self.brti_detail = "Kalshi private key could not be loaded: " + " | ".join(errors)
+        return None
 
     def sign_kalshi(self, ts_ms: str, method: str, path: str) -> str:
         msg = f"{ts_ms}{method.upper()}{path.split('?')[0]}".encode("utf-8")
