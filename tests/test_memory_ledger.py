@@ -70,3 +70,32 @@ def test_supabase_history_is_not_pruned_by_memory_retention_policy():
         limit=10, contract_ticker="KXBTC15M-HISTORY"
     )
     assert len(rows) == 3
+
+def test_diagnostic_history_retention_bounds_only_diagnostic_tables(monkeypatch):
+    monkeypatch.setattr(PredictionLedger, "MEMORY_OBSERVATION_RETENTION", 2)
+    monkeypatch.setattr(PredictionLedger, "MEMORY_REFERENCE_RETENTION", 2)
+    monkeypatch.setattr(PredictionLedger, "MEMORY_PRUNE_EVERY_WRITES", 1)
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-RETENTION-TEST"
+
+    for index in range(3):
+        ledger.record_prediction_observation(
+            ticker, float(index), 100.0, {"i": index}
+        )
+        ledger.record_multi_exchange_reference(
+            float(index), ticker, 100.0, 101.0, 102.0,
+            {"status": "LIVE", "reference_price": 101.0},
+        )
+
+    observations = ledger.get_recent_prediction_observations(
+        limit=10, contract_ticker=ticker
+    )
+    with ledger._connection() as conn:
+        reference_count = conn.execute(
+            "SELECT COUNT(*) FROM multi_exchange_reference WHERE contract_ticker = ?",
+            (ticker,),
+        ).fetchone()[0]
+
+    assert len(observations) == 2
+    assert int(reference_count) == 2
+
