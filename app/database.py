@@ -24,6 +24,12 @@ def _parse_market_regime(raw):
 class PredictionLedger:
     """Prediction and trade ledger backed exclusively by Supabase PostgreSQL."""
 
+    # Bound diagnostic history only. Official predictions, forecast locks, trades,
+    # and settlement records are never subject to this retention policy.
+    MEMORY_OBSERVATION_RETENTION = 10000
+    MEMORY_REFERENCE_RETENTION = 10000
+    MEMORY_PRUNE_EVERY_WRITES = 100
+
     def __init__(self):
         self.database_url = settings.database_url
         if not self.database_url:
@@ -32,6 +38,7 @@ class PredictionLedger:
             )
         self._engine_weights_cache = None
         self._engine_weights_cache_ts = 0.0
+        self._diagnostic_writes_since_prune = 0
         self._init_db()
 
     def _connect(self):
@@ -182,6 +189,36 @@ class PredictionLedger:
                 conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN reference_vs_strike_bps DOUBLE PRECISION")
 
 
+    def _prune_diagnostic_history(self, conn, contract_ticker: str) -> None:
+        """Keep recent diagnostic rows per contract without touching scored records."""
+        self._diagnostic_writes_since_prune += 1
+        interval = max(1, int(self.MEMORY_PRUNE_EVERY_WRITES))
+        if self._diagnostic_writes_since_prune < interval:
+            return
+        self._diagnostic_writes_since_prune = 0
+        observation_keep = max(1, int(self.MEMORY_OBSERVATION_RETENTION))
+        reference_keep = max(1, int(self.MEMORY_REFERENCE_RETENTION))
+        conn.execute(
+            """DELETE FROM prediction_observations
+               WHERE id IN (
+                   SELECT id FROM prediction_observations
+                   WHERE contract_ticker = ?
+                   ORDER BY epoch_ts DESC, id DESC
+                   OFFSET ?
+               )""",
+            (contract_ticker, observation_keep),
+        )
+        conn.execute(
+            """DELETE FROM multi_exchange_reference
+               WHERE id IN (
+                   SELECT id FROM multi_exchange_reference
+                   WHERE contract_ticker = ?
+                   ORDER BY epoch_ts DESC, id DESC
+                   OFFSET ?
+               )""",
+            (contract_ticker, reference_keep),
+        )
+
     def get_storage_health(self) -> dict:
         """Report the live Supabase PostgreSQL connection and ledger row counts."""
         try:
@@ -245,6 +282,7 @@ class PredictionLedger:
                     bps(primary_spot_price, official_brti_price), bps(reference_price, strike_price),
                 ),
             )
+            self._prune_diagnostic_history(conn, contract_ticker)
             return int(cur.lastrowid)
 
     def get_multi_exchange_reference_history(self, limit: int = 200) -> List[dict]:
