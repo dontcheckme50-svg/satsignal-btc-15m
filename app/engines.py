@@ -6,7 +6,7 @@ from app.config import settings
 from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, ForecastReport, MarketRegime, RegimeReport, Signal, WeaknessReport
 
 class EvidenceEngine:
-    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
+    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None, synthetic_benchmark_price: Optional[float] = None, synthetic_benchmark_age_sec: Optional[float] = None, synthetic_benchmark_eligible: bool = False) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
         recent_trades = [t for t in trades if contract.open_timestamp <= t[0] and now - 60.0 <= t[0] <= now]
