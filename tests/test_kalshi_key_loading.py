@@ -1,6 +1,7 @@
 from types import SimpleNamespace
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+import base64
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
 import app.feeds as feeds
 
@@ -132,3 +133,25 @@ def test_prefers_valid_inline_key_when_both_sources_are_configured(monkeypatch, 
     assert _public_bytes(hub._private_key) != _public_bytes(path_expected)
     assert hub.brti_detail == "Kalshi private key loaded from KALSHI_PRIVATE_KEY"
 
+
+
+def test_rsa_kalshi_signature_uses_digest_length_salt(monkeypatch):
+    key, _ = _rsa_pem()
+    hub = _hub_with_key_settings(monkeypatch)
+    hub._private_key = key
+
+    timestamp = "1760000000000"
+    method = "GET"
+    path = "/trade-api/v2/cfbenchmarks/values"
+    message = f"{timestamp}{method}{path}".encode("utf-8")
+    signature = base64.b64decode(hub.sign_kalshi(timestamp, method, path))
+
+    key.public_key().verify(
+        signature,
+        message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.DIGEST_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
