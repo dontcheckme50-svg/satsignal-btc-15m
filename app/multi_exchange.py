@@ -503,5 +503,5 @@ class MultiExchangeReference:
                 "reason": "PASS" if len(accepted) >= 2 and composite is not None else ("INSUFFICIENT_AGREEMENT" if usd_live else "NO_FRESH_USD_VENUES"),
             },
             "benchmark_type": "SYNTHETIC_MULTI_EXCHANGE",
-            "method": "Synthetic USD-venue reference: median outlier filter (0.35%), then capped depth-weighted mid-price; never official CF Benchmarks BRTI. Cross-venue trade-flow volumes are summed observations and may duplicate activity across venues; they are not unique global volume.",
+            "method": "Synthetic USD-venue reference: median outlier filter (0.35%), then capped depth-weighted mid-price; not CF Benchmarks BRTI. Cross-venue trade-flow volumes are summed observations and may duplicate activity across venues; they are not unique global volume.",
         }
