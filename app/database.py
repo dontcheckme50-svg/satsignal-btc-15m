@@ -463,6 +463,7 @@ class PredictionLedger:
                 "INSERT INTO prediction_observations (contract_ticker, epoch_ts, seconds_remaining, payload_json) VALUES (?, ?, ?, ?)",
                 (contract_ticker, epoch_ts, seconds_remaining, json.dumps(payload, default=lambda value: getattr(value, "value", str(value)))),
             )
+            self._prune_diagnostic_history(conn, contract_ticker)
             return int(cur.lastrowid)
 
     def get_recent_prediction_observations(self, limit: int = 100, contract_ticker: Optional[str] = None) -> List[dict]:
