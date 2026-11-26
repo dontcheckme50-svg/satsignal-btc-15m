@@ -76,7 +76,7 @@ class EvidenceEngine:
         if synthetic_z is not None and brti_z is not None:
             strike_z = 0.65 * spot_z + 0.25 * brti_z + 0.10 * synthetic_z
         elif synthetic_z is not None:
-            strike_z = 0.80 * spot_z + 0.20 * synthetic_z
+            strike_z = 0.90 * spot_z + 0.10 * synthetic_z
         else:
             strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
         brti_spread_bps = (
