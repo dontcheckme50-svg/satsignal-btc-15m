@@ -368,7 +368,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
     <div class="card"><h3>Live Data Feed Health</h3><div id="feeds-list"></div></div>
     <div class="card">
-      <h3>Multi-Exchange Reference <span id="mx-status" style="color:var(--wait)">SHADOW / WAITING</span></h3>
+      <h3>Synthetic Benchmark <span id="mx-status" style="color:var(--wait)">WAITING</span></h3>
+      <div class="kv"><span>Benchmark quality / prediction use</span><span id="mx-quality">Waiting for 2 agreeing USD venues</span></div>
       <div class="kv"><span>Consolidated USD Reference</span><span id="mx-price">Waiting for 2 USD venues</span></div>
       <div class="kv"><span>Contributing Venues</span><span id="mx-venues">--</span></div>
       <div class="kv"><span>Individual Venue Health</span><span id="mx-venue-health">--</span></div>
@@ -562,8 +563,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!res.ok) return;
       const m = await res.json();
       const statusEl = document.getElementById("mx-status");
-      statusEl.textContent = m.status + " / SHADOW";
-      statusEl.style.color = m.status === "LIVE" ? "var(--up)" : "var(--wait)";
+      statusEl.textContent = "SYNTHETIC / " + m.status;
+      statusEl.style.color = m.status === "LIVE" && m.quality?.eligible ? "var(--up)" : "var(--wait)";
+      const quality = m.quality || {};
+      document.getElementById("mx-quality").textContent =
+        quality.eligible ? `PASS · ${quality.accepted_venue_count} venues · ${Number(m.reference_age_seconds||0).toFixed(1)}s · supplemental evidence active`
+          : `BLOCKED · ${quality.reason || "quality gate not met"} · not used by prediction`;
       document.getElementById("mx-price").textContent = m.reference_price != null ? fmtUSD(m.reference_price) : "Waiting for 2 USD venues";
       document.getElementById("mx-venues").textContent = `${(m.included_venues||[]).join(", ")||"--"} (${m.usd_venue_count_live||0}/2 USD feeds)`;
       document.getElementById("mx-venue-health").textContent = (m.venues||[]).map(v => `${v.venue}: ${v.status}${v.connected ? " [connected]" : ""}${v.age_seconds!=null ? " "+Number(v.age_seconds).toFixed(1)+"s" : ""}`).join(" | ") || "--";

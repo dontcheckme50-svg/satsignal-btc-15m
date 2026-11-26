@@ -194,11 +194,23 @@ class PredictorOrchestrator:
             and brti_age <= settings.stale_feed_threshold_sec
         )
         official_brti_price = self.hub.official_brti_price if brti_is_fresh else None
+        synthetic_quality = multi_reference.get("quality") or {}
+        synthetic_age = multi_reference.get("reference_age_seconds")
+        synthetic_eligible = bool(
+            multi_reference.get("status") == "LIVE"
+            and synthetic_quality.get("eligible") is True
+            and isinstance(synthetic_age, (int, float))
+            and math.isfinite(float(synthetic_age))
+            and 0.0 <= float(synthetic_age) <= 5.0
+        )
         ev = self.evidence_engine.analyze(
             ts, live_price, new_contract, list(self.hub.trades),
             observed_bars, evidence_bids, evidence_asks,
             official_brti_price=official_brti_price,
             official_brti_age_sec=brti_age if brti_is_fresh else None,
+            synthetic_benchmark_price=reference_price if synthetic_eligible else None,
+            synthetic_benchmark_age_sec=float(synthetic_age) if synthetic_eligible else None,
+            synthetic_benchmark_eligible=synthetic_eligible,
         )
         weakness = self.weakness_engine.analyze(
             ev, spot_age, book_age, book_source_matches=book_source_matches

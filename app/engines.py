@@ -6,7 +6,7 @@ from app.config import settings
 from app.models import ContractInfo, EarlyPredictionReport, EvidenceMetrics, FinalDecisionReport, ForecastReport, MarketRegime, RegimeReport, Signal, WeaknessReport
 
 class EvidenceEngine:
-    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None) -> EvidenceMetrics:
+    def analyze(self, now: float, live_price: float, contract: ContractInfo, trades: List[Tuple[float, float, float, bool]], bars_1s: List[Tuple[int, float, float]], bids: List[Tuple[float, float]], asks: List[Tuple[float, float]], official_brti_price: Optional[float] = None, official_brti_age_sec: Optional[float] = None, synthetic_benchmark_price: Optional[float] = None, synthetic_benchmark_age_sec: Optional[float] = None, synthetic_benchmark_eligible: bool = False) -> EvidenceMetrics:
         dist = live_price - contract.strike_price
         dist_pct = (dist / contract.strike_price * 100.0) if contract.strike_price > 0 else 0.0
         recent_trades = [t for t in trades if contract.open_timestamp <= t[0] and now - 60.0 <= t[0] <= now]
@@ -59,9 +59,26 @@ class EvidenceEngine:
         )
         brti_distance = (float(official_brti_price) - contract.strike_price) if brti_valid else None
         brti_z = self._strike_z_score(float(official_brti_price), contract.strike_price, contract.seconds_remaining, ann_vol) if brti_valid else None
-        # Spot remains the primary price input; valid official BRTI contributes
-        # an independent settlement-benchmark confirmation, never a fallback.
-        strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
+        synthetic_age = synthetic_benchmark_age_sec
+        synthetic_valid = (
+            synthetic_benchmark_eligible
+            and synthetic_benchmark_price is not None
+            and math.isfinite(float(synthetic_benchmark_price))
+            and float(synthetic_benchmark_price) > 0
+            and synthetic_age is not None
+            and math.isfinite(float(synthetic_age))
+            and 0.0 <= float(synthetic_age) <= 5.0
+        )
+        synthetic_z = self._strike_z_score(float(synthetic_benchmark_price), contract.strike_price, contract.seconds_remaining, ann_vol) if synthetic_valid else None
+        # Spot remains primary; official BRTI retains greater benchmark weight.
+        # The synthetic multi-venue estimate is supplemental only and never
+        # replaces or impersonates the official BRTI feed.
+        if synthetic_z is not None and brti_z is not None:
+            strike_z = 0.65 * spot_z + 0.25 * brti_z + 0.10 * synthetic_z
+        elif synthetic_z is not None:
+            strike_z = 0.90 * spot_z + 0.10 * synthetic_z
+        else:
+            strike_z = (0.65 * spot_z + 0.35 * brti_z) if brti_z is not None else spot_z
         brti_spread_bps = (
             ((float(official_brti_price) - live_price) / live_price) * 10000.0
             if brti_valid and live_price > 0 else None
@@ -82,7 +99,7 @@ class EvidenceEngine:
             -80.0, 80.0,
         ))
         sig = Signal.UP if raw_score >= 18.0 else (Signal.DOWN if raw_score <= -18.0 else Signal.WAIT)
-        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6))
+        return EvidenceMetrics(live_price=round(live_price, 2), distance_from_strike=round(dist, 2), distance_pct=round(dist_pct, 4), buying_pressure_pct=buy_pct, selling_pressure_pct=sell_pct, trade_delta_60s=delta_60s, cvd_contract=round(cvd, 4), volume_ratio=vol_ratio, momentum_score=round(mom_score, 1), rsi_14=round(rsi_14, 1), volatility_annualized=round(ann_vol, 4), orderbook_imbalance=round(obi, 3), large_order_bias=round(large_bias, 3), structure_bias=structure, raw_score=round(raw_score, 1), signal=sig, official_brti_price=round(float(official_brti_price), 2) if brti_valid else None, official_brti_age_seconds=round(float(brti_age), 3) if brti_valid else None, brti_distance_from_strike=round(float(brti_distance), 2) if brti_valid else None, brti_spot_spread_bps=round(brti_spread_bps, 3) if brti_spread_bps is not None else None, brti_conflict=brti_conflict, strike_z_score=round(strike_z, 6), synthetic_benchmark_price=round(float(synthetic_benchmark_price), 2) if synthetic_valid else None, synthetic_benchmark_age_seconds=round(float(synthetic_age), 3) if synthetic_valid else None, synthetic_benchmark_used=synthetic_valid)
 
     @staticmethod
     def _resample_prices_to_seconds(

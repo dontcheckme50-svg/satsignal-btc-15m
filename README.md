@@ -46,11 +46,11 @@ Supabase PostgreSQL is the only supported persistence backend. Set `DATABASE_URL
 - Binance aggregate trades and depth stream are primary.
 - Coinbase WebSocket is fallback; its fallback order book is top-of-book only, not 20 levels.
 - Kalshi polling accepts only currently active KXBTC15M markets with a valid official `floor_strike`.
-- Official CF Benchmarks BRTI is accepted only from a valid, source-timestamped, fresh Kalshi pass-through response. The documented CF payload array is parsed using its source event time; stale, future-dated, malformed, and repeat-of-previous values are excluded. When fresh, BRTI contributes an independent 35% component to the Evidence Engine's strike-distance Z-score while primary spot retains 65%; a material spot/BRTI disagreement across the Kalshi strike adds a weakness penalty. BRTI is never replaced by Binance or another exchange. Missing entitlement leaves the BRTI component inactive rather than fabricating a value.
+- Official CF Benchmarks BRTI is accepted only from a valid, source-timestamped, fresh Kalshi pass-through response. The documented CF payload array is parsed using its source event time; stale, future-dated, malformed, and repeat-of-previous values are excluded. When fresh and no synthetic benchmark is eligible, BRTI contributes 35% of the Evidence Engine's strike-distance Z-score while primary spot retains 65%; when both are eligible, BRTI contributes 25%, the synthetic benchmark 10%, and primary spot 65%; a material spot/BRTI disagreement across the Kalshi strike adds a weakness penalty. BRTI is never replaced by Binance or another exchange. Missing entitlement leaves the BRTI component inactive rather than fabricating a value.
 
-## Multi-exchange reference (shadow mode)
+## SATSIGNAL Synthetic Benchmark (guarded supplemental mode)
 
-A read-only shadow market-data layer runs independently of the five prediction engines:
+The multi-exchange layer builds a clearly labeled synthetic BTC reference from independent public venues. It is **not official CF Benchmarks BRTI** and cannot replace or impersonate that feed.
 
 - Coinbase BTC/USD Level 2 book and matches stream.
 - Kraken BTC/USD book and trades WebSocket.
@@ -58,9 +58,9 @@ A read-only shadow market-data layer runs independently of the five prediction e
 - Binance BTC/USDT is displayed as a comparison venue only and is not mixed into the USD reference.
 
 The composite uses USD-quoted venue mid-prices, rejects venues more than 0.35% from the median, then calculates a capped depth-weighted mid-price from accepted venues. Near-market liquidity and imbalance are measured within 0.25% of mid. A composite is marked LIVE only when at least two accepted USD venues are fresh; otherwise it is PARTIAL or UNAVAILABLE. This is an independent estimate, **not official CF Benchmarks BRTI**.
-- Coinbase and Kraken trade prints are normalized to aggressor-side BUY/SELL flow (Coinbase maker-side is inverted). Rolling 15s, 60s, and 180s windows expose buy volume, sell volume, net BTC delta, delta ratio, trade count, and unclassified volume. Quiet windows are distinguished from unclassified flow. These remain shadow measurements, not prediction inputs.
+- Coinbase and Kraken trade prints are normalized to aggressor-side BUY/SELL flow (Coinbase maker-side is inverted). Rolling 15s, 60s, and 180s windows expose buy volume, sell volume, net BTC delta, delta ratio, trade count, and unclassified volume. Quiet windows are distinguished from unclassified flow. These trade-flow measurements remain shadow-only and are not prediction inputs.
 
-The shadow feed does not affect predictions or execution. It is visible on the dashboard and through:
+The synthetic price reference may contribute to strike-distance evidence only when at least two independent USD venues agree, the composite is LIVE, and its age is at most five seconds. When official BRTI is also fresh, spot/BRTI/synthetic weights are 65%/25%/10%; without fresh BRTI, spot/synthetic weights are 90%/10%. Ineligible or stale synthetic data is excluded. The synthetic feed never substitutes for official BRTI, changes tape/microstructure raw score, authorizes execution, or makes synthetic fallback contracts actionable. The dashboard and API also expose the shadow venue and trade-flow observations through:
 
 - `/api/multi-exchange` — current venue/reference snapshot and comparison versus primary spot, official BRTI (when fresh), and strike.
 - `/api/multi-exchange/history` — persisted observations.
