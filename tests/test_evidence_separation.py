@@ -55,6 +55,8 @@ def test_eligible_synthetic_benchmark_is_supplemental_and_explicit():
     assert synthetic_up.synthetic_benchmark_price == 90040.0
     assert synthetic_up.strike_z_score > baseline.strike_z_score > synthetic_down.strike_z_score
     assert synthetic_up.raw_score == baseline.raw_score
+    expected_without_brti = 0.90 * EvidenceEngine._strike_z_score(90010.0, contract.strike_price, contract.seconds_remaining, baseline.volatility_annualized) + 0.10 * EvidenceEngine._strike_z_score(90040.0, contract.strike_price, contract.seconds_remaining, baseline.volatility_annualized)
+    assert synthetic_up.strike_z_score == round(expected_without_brti, 6)
 
 
 def test_ineligible_or_stale_synthetic_benchmark_is_ignored():
