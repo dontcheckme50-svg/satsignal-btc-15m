@@ -88,3 +88,78 @@ def test_brti_request_does_not_override_custom_host():
     assert MarketDataHub._brti_request_base_urls(
         "https://custom.example/trade-api/v2"
     ) == ["https://custom.example/trade-api/v2"]
+
+@pytest.mark.asyncio
+async def test_brti_poll_fails_over_to_supported_host_after_timeout(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    import app.feeds as feeds
+
+    monkeypatch.setattr(
+        feeds,
+        "settings",
+        SimpleNamespace(
+            kalshi_key_id="test-key-id",
+            kalshi_prod_base_url="https://external-api.kalshi.com/trade-api/v2",
+            kalshi_private_key=None,
+            kalshi_private_key_path=None,
+        ),
+    )
+    hub = MarketDataHub()
+    hub._private_key = ed25519.Ed25519PrivateKey.generate()
+    hub._running = True
+    now_ms = int(time.time() * 1000)
+    calls = []
+
+    class FakeResponse:
+        status = 200
+
+        async def json(self):
+            hub._running = False
+            return {"data": {"payload": [{"value": "90001.25", "time": now_ms}]}}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeRequest:
+        def __init__(self, should_timeout):
+            self.should_timeout = should_timeout
+
+        async def __aenter__(self):
+            if self.should_timeout:
+                raise asyncio.TimeoutError()
+            return FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def get(self, url, **_kwargs):
+            calls.append(url)
+            return FakeRequest(should_timeout=len(calls) == 1)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(feeds.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(feeds.asyncio, "sleep", no_sleep)
+
+    await hub._brti_poll_loop()
+
+    assert calls == [
+        "https://external-api.kalshi.com/trade-api/v2/cfbenchmarks/values?id=BRTI",
+        "https://api.elections.kalshi.com/trade-api/v2/cfbenchmarks/values?id=BRTI",
+    ]
+    assert hub.brti_status == "LIVE"
+    assert hub.official_brti_price == 90001.25
+    assert "api.elections.kalshi.com" in hub.brti_detail
