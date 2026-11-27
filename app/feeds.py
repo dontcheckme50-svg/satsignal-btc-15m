@@ -603,6 +603,29 @@ class MarketDataHub:
                     self.kalshi_status_detail = f"Poller error: {e}"
                 await asyncio.sleep(3.0)
 
+    @staticmethod
+    def _brti_exception_detail(exc: Exception) -> str:
+        """Preserve exception type when str(exc) is empty (for example TimeoutError)."""
+        message = str(exc).strip() or repr(exc)
+        return f"BRTI check error: {type(exc).__name__}: {message[:240]}"
+
+    @staticmethod
+    def _brti_payload_shape_detail(payload) -> str:
+        """Summarize response structure without logging index values or credentials."""
+        if not isinstance(payload, dict):
+            return f"BRTI HTTP 200 but unexpected response type: {type(payload).__name__}"
+        data = payload.get("data", payload)
+        inner = data.get("payload", data) if isinstance(data, dict) else data
+        rows = inner if isinstance(inner, list) else ([inner] if isinstance(inner, dict) else [])
+        first_keys = sorted(str(key) for key in rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+        outer_keys = sorted(str(key) for key in payload.keys())
+        data_keys = sorted(str(key) for key in data.keys()) if isinstance(data, dict) else []
+        return (
+            "BRTI HTTP 200 but no fresh valid value; "
+            f"outer_keys={outer_keys}, data_keys={data_keys}, "
+            f"payload_type={type(inner).__name__}, rows={len(rows)}, "
+            f"first_row_fields={first_keys}"
+        )
     async def _brti_poll_loop(self) -> None:
         endpoint = "/trade-api/v2/cfbenchmarks/values"
         url = f"{settings.kalshi_prod_base_url}/cfbenchmarks/values?id=BRTI"
@@ -613,7 +636,8 @@ class MarketDataHub:
                     headers = {"KALSHI-ACCESS-KEY": settings.kalshi_key_id or "", "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint), "KALSHI-ACCESS-TIMESTAMP": ts_ms}
                     async with session.get(url, headers=headers, timeout=5) as resp:
                         if resp.status == 200:
-                            parsed = self._parse_brti_payload(await resp.json())
+                            payload = await resp.json()
+                            parsed = self._parse_brti_payload(payload)
                             if parsed:
                                 value, source_ts = parsed
                                 if source_ts != self._last_brti_source_ts or value != self._last_brti_value:
@@ -625,15 +649,31 @@ class MarketDataHub:
                                 else:
                                     self.brti_status = "STALE"
                                     self.brti_detail = "BRTI source value/timestamp has not advanced"
+                            else:
+                                self.brti_status = "UNAVAILABLE"
+                                self.brti_detail = self._brti_payload_shape_detail(payload)
                         elif resp.status in (401, 403):
-                            self.brti_status, self.brti_detail = "UNAVAILABLE", "Account lacks CF Benchmarks BRTI entitlement"
+                            try:
+                                body = (await resp.text())[:240]
+                            except Exception:
+                                body = ""
+                            suffix = f"; response={body}" if body else ""
+                            self.brti_status = "UNAVAILABLE"
+                            self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}: authentication or entitlement denied{suffix}"
                             return
                         else:
-                            self.brti_status, self.brti_detail = "UNAVAILABLE", f"HTTP {resp.status}"
+                            try:
+                                body = (await resp.text())[:240]
+                            except Exception:
+                                body = ""
+                            suffix = f": {body}" if body else ""
+                            self.brti_status = "UNAVAILABLE"
+                            self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}{suffix}"
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    self.brti_status, self.brti_detail = "UNAVAILABLE", f"BRTI check error: {e}"
+                    self.brti_status = "UNAVAILABLE"
+                    self.brti_detail = self._brti_exception_detail(e)
                 await asyncio.sleep(2.0)
 
     def get_feed_statuses(self) -> List[FeedStatus]:
