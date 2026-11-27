@@ -1,4 +1,5 @@
 import base64
+import pytest
 from types import SimpleNamespace
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
