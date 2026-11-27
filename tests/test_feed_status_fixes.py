@@ -129,8 +129,44 @@ def test_rejects_non_brti_or_stale_5hz_events():
     assert MarketDataHub._parse_brti_5hz_message(stale, now=now) is None
 
 
+def test_brti_5hz_indexlist_must_explicitly_include_brti():
+    valid = {
+        "type": "cfbenchmarks_value_5hz_indexlist",
+        "msg": {"index_ids": ["BRTI", "ETHUSD_RTI"]},
+    }
+    missing = {
+        "type": "cfbenchmarks_value_5hz_indexlist",
+        "msg": {"index_ids": ["ETHUSD_RTI"]},
+    }
+
+    assert MarketDataHub._brti_ws_indexlist_has_brti(valid, "cfbenchmarks_value_5hz") is True
+    assert MarketDataHub._brti_ws_indexlist_has_brti(missing, "cfbenchmarks_value_5hz") is False
+    assert MarketDataHub._brti_ws_indexlist_has_brti({"type": "other"}, "cfbenchmarks_value_5hz") is None
+
+
+def test_parses_official_standard_one_second_brti_websocket_tick():
+    now = 1_800_000_000.25
+    event = {
+        "type": "cfbenchmarks_value",
+        "msg": {
+            "index_id": "BRTI",
+            "received_at": 1_800_000_000_220,
+            "data": json.dumps({
+                "type": "value",
+                "id": "BRTI",
+                "time": 1_800_000_000_200,
+                "value": "90123.4567",
+            }),
+        },
+    }
+
+    assert MarketDataHub._parse_brti_ws_message(
+        event, "cfbenchmarks_value", now=now
+    ) == (90123.4567, 1_800_000_000.2)
+
+
 @pytest.mark.asyncio
-async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypatch):
+async def test_brti_websocket_verifies_indexlist_and_fails_over(monkeypatch):
     import asyncio
     from types import SimpleNamespace
     import app.feeds as feeds
@@ -148,7 +184,7 @@ async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypat
     hub._private_key = feeds.ed25519.Ed25519PrivateKey.generate()
     hub._running = True
     calls = []
-    subscriptions = []
+    sent_messages = []
     source_ts_ms = int(time.time() * 1000)
 
     class FakeFrame:
@@ -158,23 +194,17 @@ async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypat
             self.data = json.dumps(event)
 
     class FakeWebSocket:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return False
-
-        async def send_json(self, value):
-            subscriptions.append(value)
-
-        def __aiter__(self):
-            async def messages():
-                yield FakeFrame({
-                    "id": 1,
-                    "type": "subscribed",
+        def __init__(self):
+            self.frames = iter([
+                FakeFrame({
+                    "id": 1, "type": "subscribed",
                     "msg": {"channel": "cfbenchmarks_value_5hz", "sid": 7},
-                })
-                yield FakeFrame({
+                }),
+                FakeFrame({
+                    "id": 2, "type": "cfbenchmarks_value_5hz_indexlist",
+                    "msg": {"index_ids": ["BRTI", "ETHUSD_RTI"]},
+                }),
+                FakeFrame({
                     "type": "cfbenchmarks_value_5hz",
                     "msg": {
                         "index_id": "BRTI",
@@ -182,9 +212,24 @@ async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypat
                         "source_ts_ms": source_ts_ms,
                         "received_at": source_ts_ms + 20,
                     },
-                })
+                }),
+            ])
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def send_json(self, value):
+            sent_messages.append(value)
+
+        async def receive(self, timeout=None):
+            frame = next(self.frames)
+            event = json.loads(frame.data)
+            if event.get("type") == "cfbenchmarks_value_5hz":
                 hub._running = False
-            return messages()
+            return frame
 
     class FakeConnect:
         def __init__(self, should_timeout):
@@ -219,17 +264,25 @@ async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypat
     ]
     assert calls[1][1]["headers"]["KALSHI-ACCESS-KEY"] == "test-key-id"
     assert calls[1][1]["headers"]["KALSHI-ACCESS-SIGNATURE"]
-    assert subscriptions == [{
-        "id": 1,
-        "cmd": "subscribe",
-        "params": {
-            "channels": ["cfbenchmarks_value_5hz"],
-            "index_ids": ["BRTI"],
+    assert sent_messages == [
+        {
+            "id": 1,
+            "cmd": "subscribe",
+            "params": {
+                "channels": ["cfbenchmarks_value_5hz"],
+                "index_ids": ["BRTI"],
+            },
         },
-    }]
+        {
+            "id": 2,
+            "cmd": "update_subscription",
+            "params": {"sid": 7, "action": "indexlist"},
+        },
+    ]
     assert hub.brti_status == "LIVE"
     assert hub.official_brti_price == 90123.45
     assert hub.last_brti_ts == pytest.approx(source_ts_ms / 1000.0)
+    assert "5Hz" in hub.brti_detail
     assert "api.elections.kalshi.com" in hub.brti_detail
 
 @pytest.mark.asyncio
