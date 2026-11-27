@@ -132,3 +132,16 @@ def test_prefers_valid_inline_key_when_both_sources_are_configured(monkeypatch, 
     assert _public_bytes(hub._private_key) != _public_bytes(path_expected)
     assert hub.brti_detail == "Kalshi private key loaded from KALSHI_PRIVATE_KEY"
 
+def test_loads_inline_quoted_rsa_pem_with_escaped_crlf(monkeypatch):
+    expected = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = expected.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    inline = '"' + pem.decode("utf-8").replace("\n", r"\r\n") + '"'
+    hub = _hub_with_key_settings(monkeypatch, inline=inline)
+
+    assert isinstance(hub._private_key, rsa.RSAPrivateKey)
+    assert hub._private_key.public_key().public_numbers() == expected.public_key().public_numbers()
+    assert hub.brti_detail == "Kalshi private key loaded from KALSHI_PRIVATE_KEY"

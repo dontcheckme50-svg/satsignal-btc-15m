@@ -78,10 +78,24 @@ class MarketDataHub:
         if isinstance(direct_value, str) and direct_value.strip():
             # Host providers commonly expose multiline PEM values either with
             # real newlines or escaped \\n sequences.
+            normalized = direct_value.lstrip("\ufeff").strip()
+
+            # Some secret dashboards preserve enclosing quotes and/or Windows
+            # line endings when a PEM is pasted into an environment variable.
+            if (
+                len(normalized) >= 2
+                and normalized[0] == normalized[-1]
+                and normalized[0] in ("'", '"')
+            ):
+                normalized = normalized[1:-1].strip()
+
             normalized = (
-                direct_value.lstrip("\ufeff")
+                normalized
                 .replace("\\r\\n", "\n")
                 .replace("\\n", "\n")
+                .replace("\\r", "\n")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
                 .strip()
             )
             candidates.append(("KALSHI_PRIVATE_KEY", normalized.encode("utf-8")))
