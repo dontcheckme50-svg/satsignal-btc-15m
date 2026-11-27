@@ -200,3 +200,21 @@ def test_kalshi_rsa_signature_uses_digest_length_pss_salt(monkeypatch):
         ),
         hashes.SHA256(),
     )
+
+
+def test_rebuilds_flattened_generic_pkcs8_pem_header():
+    expected = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = expected.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    flattened = pem.decode("utf-8").replace("\n", "")
+
+    normalized = normalize_kalshi_private_key_text(flattened)
+    loaded = serialization.load_pem_private_key(
+        normalized.encode("utf-8"), password=None
+    )
+
+    assert isinstance(loaded, rsa.RSAPrivateKey)
+    assert loaded.public_key().public_numbers() == expected.public_key().public_numbers()
