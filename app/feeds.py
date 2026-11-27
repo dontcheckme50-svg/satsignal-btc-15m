@@ -695,6 +695,7 @@ class MarketDataHub:
                                 if resp.status not in (408, 429, 500, 502, 503, 504) or base_index == len(bases) - 1:
                                     self.brti_status = "UNAVAILABLE"
                                     self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}{suffix}"
+                                    break
                         except asyncio.CancelledError:
                             raise
                         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
