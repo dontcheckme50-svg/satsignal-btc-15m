@@ -93,7 +93,12 @@ class PredictionLedger:
                     up_prob DOUBLE PRECISION NOT NULL,
                     down_prob DOUBLE PRECISION NOT NULL,
                     strike_price DOUBLE PRECISION NOT NULL,
-                    btc_price_at_lock DOUBLE PRECISION NOT NULL
+                    btc_price_at_lock DOUBLE PRECISION NOT NULL,
+                    settled INTEGER NOT NULL DEFAULT 0,
+                    settlement_source TEXT,
+                    settlement_price DOUBLE PRECISION,
+                    actual_outcome TEXT,
+                    won INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS prediction_observations (
                     id BIGSERIAL PRIMARY KEY,
@@ -173,6 +178,17 @@ class PredictionLedger:
             trade_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("trades",)).fetchall()}
             if "settled_at" not in trade_columns:
                 conn.execute("ALTER TABLE trades ADD COLUMN settled_at TEXT")
+            forecast_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("forecast_locks",)).fetchall()}
+            if "settled" not in forecast_columns:
+                conn.execute("ALTER TABLE forecast_locks ADD COLUMN settled INTEGER NOT NULL DEFAULT 0")
+            if "settlement_source" not in forecast_columns:
+                conn.execute("ALTER TABLE forecast_locks ADD COLUMN settlement_source TEXT")
+            if "settlement_price" not in forecast_columns:
+                conn.execute("ALTER TABLE forecast_locks ADD COLUMN settlement_price DOUBLE PRECISION")
+            if "actual_outcome" not in forecast_columns:
+                conn.execute("ALTER TABLE forecast_locks ADD COLUMN actual_outcome TEXT")
+            if "won" not in forecast_columns:
+                conn.execute("ALTER TABLE forecast_locks ADD COLUMN won INTEGER")
             reference_columns = {row["name"] for row in conn.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", ("multi_exchange_reference",)).fetchall()}
             if "primary_spot_age_seconds" not in reference_columns:
                 conn.execute("ALTER TABLE multi_exchange_reference ADD COLUMN primary_spot_age_seconds DOUBLE PRECISION")
@@ -480,6 +496,11 @@ class PredictionLedger:
                        FROM trades
                        WHERE status = 'OPEN' AND contract_ticker LIKE 'KXBTC15M%'
                        GROUP BY contract_ticker
+                       UNION ALL
+                       SELECT contract_ticker, MIN(epoch_ts) AS first_seen
+                       FROM forecast_locks
+                       WHERE settled = 0 AND contract_ticker LIKE 'KXBTC15M%'
+                       GROUP BY contract_ticker
                    )
                    SELECT contract_ticker, MIN(first_seen) AS first_seen
                    FROM pending
@@ -530,6 +551,22 @@ class PredictionLedger:
                     (settlement_source, settlement_price, outcome, grade(r["final_signal"]), grade(r["main_signal"]), grade(r["early_signal"]), r["id"]),
                 )
                 updated += 1
+
+            forecast_locks = conn.execute(
+                "SELECT * FROM forecast_locks WHERE contract_ticker = ? AND settled = 0",
+                (contract_ticker,),
+            ).fetchall()
+            for lock in forecast_locks:
+                outcome = official_result if official_result in ("UP", "DOWN") else (
+                    "UP" if settlement_price >= float(lock["strike_price"]) else "DOWN"
+                )
+                won = int(lock["signal"] == outcome)
+                conn.execute(
+                    """UPDATE forecast_locks SET settled = 1, settlement_source = ?,
+                       settlement_price = ?, actual_outcome = ?, won = ?
+                       WHERE contract_ticker = ? AND settled = 0""",
+                    (settlement_source, settlement_price, outcome, won, contract_ticker),
+                )
 
             open_trades = conn.execute("SELECT * FROM trades WHERE contract_ticker = ? AND status = 'OPEN'", (contract_ticker,)).fetchall()
             for tr in open_trades:
