@@ -55,7 +55,7 @@ def normalize_kalshi_private_key_text(value: str) -> str:
     # Rebuild PEM line wrapping if a host flattened all line breaks.
     # Preserve traditional encrypted-PEM metadata blocks untouched.
     match = re.fullmatch(
-        r"\s*-----BEGIN ([A-Z0-9 ]+PRIVATE KEY)-----\s*(.*?)\s*-----END \1-----\s*",
+        r"\s*-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----\s*(.*?)\s*-----END \1-----\s*",
         text,
         flags=re.DOTALL,
     )
@@ -79,10 +79,10 @@ def normalize_kalshi_private_key_text(value: str) -> str:
 
 def _safe_key_input_summary(source: str, raw: str, normalized: str) -> str:
     """Return key-format diagnostics only; never include secret content."""
-    raw_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----", raw))
-    raw_footer = bool(re.search(r"-----END [A-Z0-9 ]+PRIVATE KEY-----", raw))
-    norm_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----", normalized))
-    norm_footer = bool(re.search(r"-----END [A-Z0-9 ]+PRIVATE KEY-----", normalized))
+    raw_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", raw))
+    raw_footer = bool(re.search(r"-----END [A-Z0-9 ]*PRIVATE KEY-----", raw))
+    norm_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", normalized))
+    norm_footer = bool(re.search(r"-----END [A-Z0-9 ]*PRIVATE KEY-----", normalized))
     raw_newlines = raw.count(chr(10)) + raw.count(chr(13))
     escaped_newlines = raw.count("\\n") + raw.count("\\r")
     return (
