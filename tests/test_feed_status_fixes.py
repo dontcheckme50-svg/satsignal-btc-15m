@@ -43,3 +43,25 @@ def test_coinbase_shadow_feed_requires_confirmation_of_both_requested_channels()
     assert not MultiExchangeReference._coinbase_subscription_confirmed(incomplete)
     assert not MultiExchangeReference._coinbase_subscription_confirmed(wrong_product)
     assert not MultiExchangeReference._coinbase_subscription_confirmed({"type": "error"})
+
+
+def test_brti_exception_diagnostic_includes_empty_timeout_exception_type():
+    detail = MarketDataHub._brti_exception_detail(TimeoutError())
+
+    assert detail == "BRTI check error: TimeoutError: TimeoutError()"
+
+
+def test_brti_payload_diagnostic_reports_shape_without_exposing_prices():
+    payload = {
+        "data": {
+            "serverTime": "2026-11-27T00:00:00Z",
+            "payload": [{"value": "12345.67", "time": 1795747200000}],
+        }
+    }
+
+    detail = MarketDataHub._brti_payload_shape_detail(payload)
+
+    assert "payload_type=list" in detail
+    assert "rows=1" in detail
+    assert "first_row_fields=['time', 'value']" in detail
+    assert "12345.67" not in detail
