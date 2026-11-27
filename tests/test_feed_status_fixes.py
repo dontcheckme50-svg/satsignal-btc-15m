@@ -2,6 +2,8 @@ import time
 
 import pytest
 
+from datetime import datetime, timedelta, timezone
+
 from app.feeds import MarketDataHub
 from app.multi_exchange import MultiExchangeReference
 
@@ -69,7 +71,7 @@ def test_brti_payload_diagnostic_reports_shape_without_exposing_prices():
     assert "12345.67" not in detail
 
 def test_brti_request_uses_kalshi_supported_compatibility_host_on_fallback():
-    assert MarketDataHub._brti_request_base_urls(
+    assert MarketDataHub._kalshi_rest_base_urls(
         "https://external-api.kalshi.com/trade-api/v2"
     ) == [
         "https://external-api.kalshi.com/trade-api/v2",
@@ -78,7 +80,7 @@ def test_brti_request_uses_kalshi_supported_compatibility_host_on_fallback():
 
 
 def test_brti_request_fallback_order_is_reversible_for_legacy_host():
-    assert MarketDataHub._brti_request_base_urls(
+    assert MarketDataHub._kalshi_rest_base_urls(
         "https://api.elections.kalshi.com/trade-api/v2/"
     ) == [
         "https://api.elections.kalshi.com/trade-api/v2",
@@ -87,7 +89,7 @@ def test_brti_request_fallback_order_is_reversible_for_legacy_host():
 
 
 def test_brti_request_does_not_override_custom_host():
-    assert MarketDataHub._brti_request_base_urls(
+    assert MarketDataHub._kalshi_rest_base_urls(
         "https://custom.example/trade-api/v2"
     ) == ["https://custom.example/trade-api/v2"]
 
@@ -165,3 +167,86 @@ async def test_brti_poll_fails_over_to_supported_host_after_timeout(monkeypatch)
     assert hub.brti_status == "LIVE"
     assert hub.official_brti_price == 90001.25
     assert "api.elections.kalshi.com" in hub.brti_detail
+
+
+@pytest.mark.asyncio
+async def test_kalshi_market_poller_fails_over_to_supported_host_after_timeout(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import app.feeds as feeds
+
+    monkeypatch.setattr(
+        feeds,
+        "settings",
+        SimpleNamespace(
+            kalshi_public_base_url="https://api.elections.kalshi.com/trade-api/v2",
+            checkpoint_interval_sec=180,
+        ),
+    )
+    hub = MarketDataHub()
+    hub._running = True
+    now = time.time()
+    calls = []
+    market = {
+        "ticker": "KXBTC15M-TEST-FAILOVER",
+        "open_time": datetime.fromtimestamp(now - 60, timezone.utc).isoformat(),
+        "close_time": datetime.fromtimestamp(now + 600, timezone.utc).isoformat(),
+        "floor_strike": 90000,
+        "yes_bid_dollars": 0.45,
+        "yes_ask_dollars": 0.46,
+        "no_bid_dollars": 0.54,
+        "no_ask_dollars": 0.55,
+    }
+
+    class FakeResponse:
+        status = 200
+
+        async def json(self):
+            hub._running = False
+            return {"markets": [market]}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeRequest:
+        def __init__(self, should_timeout):
+            self.should_timeout = should_timeout
+
+        async def __aenter__(self):
+            if self.should_timeout:
+                raise asyncio.TimeoutError()
+            return FakeResponse()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def get(self, url, **_kwargs):
+            calls.append(url)
+            return FakeRequest(should_timeout=len(calls) == 1)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(feeds.aiohttp, "ClientSession", FakeSession)
+    monkeypatch.setattr(feeds.asyncio, "sleep", no_sleep)
+
+    await hub._kalshi_market_loop()
+
+    assert calls == [
+        "https://api.elections.kalshi.com/trade-api/v2/markets",
+        "https://external-api.kalshi.com/trade-api/v2/markets",
+    ]
+    assert hub.kalshi_contract is not None
+    assert hub.kalshi_contract.ticker == "KXBTC15M-TEST-FAILOVER"
+    assert hub.kalshi_contract.is_official_kalshi is True
+    assert "via external-api.kalshi.com" in hub.kalshi_status_detail
