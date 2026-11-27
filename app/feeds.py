@@ -642,7 +642,7 @@ class MarketDataHub:
                             raise
                         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
                             elapsed = asyncio.get_running_loop().time() - started
-                            detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
+                            detail = self._kalshi_request_exception_detail(exc, 'Kalshi market')
                             attempt_details.append(
                                 f"{host} after {elapsed:.2f}s: {detail}"
                             )
@@ -654,7 +654,7 @@ class MarketDataHub:
                         except Exception as exc:
                             elapsed = asyncio.get_running_loop().time() - started
                             self.kalshi_status_detail = (
-                                f"{host} after {elapsed:.2f}s: {self._kalshi_request_exception_detail(exc, "Kalshi market")}"
+                                f"{host} after {elapsed:.2f}s: {self._kalshi_request_exception_detail(exc, 'Kalshi market')}"
                             )
                             response_received = True
                             break
@@ -663,7 +663,7 @@ class MarketDataHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    self.kalshi_status_detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
+                    self.kalshi_status_detail = self._kalshi_request_exception_detail(exc, 'Kalshi market')
                 await asyncio.sleep(3.0)
     @staticmethod
     def _kalshi_rest_base_urls(configured_base_url: str) -> List[str]:
@@ -772,20 +772,20 @@ class MarketDataHub:
                         except asyncio.CancelledError:
                             raise
                         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
-                            detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
+                            detail = self._kalshi_request_exception_detail(exc, 'BRTI')
                             attempt_details.append(f"{host}: {detail}")
                             if base_index == len(bases) - 1:
                                 self.brti_status = "UNAVAILABLE"
                                 self.brti_detail = "BRTI request failed on all supported Kalshi hosts: " + " | ".join(attempt_details)
                         except Exception as exc:
                             self.brti_status = "UNAVAILABLE"
-                            self.brti_detail = f"{host}: {self._kalshi_request_exception_detail(exc, "Kalshi market")}"
+                            self.brti_detail = f"{host}: {self._kalshi_request_exception_detail(exc, 'BRTI')}"
                             break
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self.brti_status = "UNAVAILABLE"
-                    self.brti_detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
+                    self.brti_detail = self._kalshi_request_exception_detail(exc, 'BRTI')
                 await asyncio.sleep(2.0)
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
