@@ -1,11 +1,12 @@
 from app.engines import EarlyPredictionEngine, ForecastEngine
+from app.orchestrator import PredictorOrchestrator
 import uuid
 
 import pytest
 
 from app.database import PredictionLedger
 from app.models import (
-    ContractInfo, EarlyPredictionReport, EvidenceMetrics, Signal, WeaknessReport,
+    ContractInfo, EarlyPredictionReport, EvidenceMetrics, ForecastReport, Signal, WeaknessReport,
 )
 
 
@@ -199,3 +200,92 @@ def test_engine_f_rejects_wait_locks():
             "strike_price": 100000.0,
             "btc_price_at_lock": 100000.0,
         })
+
+class _ForecastLockLedger:
+    def __init__(self):
+        self.locks = {}
+        self.write_count = 0
+
+    def get_forecast_lock(self, ticker):
+        return self.locks.get(ticker)
+
+    def record_forecast_lock(self, row):
+        self.write_count += 1
+        return self.locks.setdefault(row["contract_ticker"], dict(row))
+
+
+def _auto_lock_orchestrator(ledger):
+    orchestrator = object.__new__(PredictorOrchestrator)
+    orchestrator.ledger = ledger
+    orchestrator._engine_f_lock_candidate_ticker = None
+    orchestrator._engine_f_lock_candidate = Signal.WAIT
+    orchestrator._engine_f_lock_candidate_count = 0
+    return orchestrator
+
+
+def test_engine_f_auto_locks_after_three_qualified_evaluations_and_persists_immutably():
+    ledger = _ForecastLockLedger()
+    orchestrator = _auto_lock_orchestrator(ledger)
+    ev = evidence(signal=Signal.UP)
+    report = ForecastReport(
+        signal=Signal.UP, confidence=64.0,
+        up_probability=0.64, down_probability=0.36,
+    )
+
+    assert orchestrator._maybe_auto_lock_engine_f(
+        contract(), report, ev, weakness(), True, 1_800_000_000.0, True
+    ) is None
+    assert orchestrator._maybe_auto_lock_engine_f(
+        contract(), report, ev, weakness(), True, 1_800_000_001.0, True
+    ) is None
+    locked = orchestrator._maybe_auto_lock_engine_f(
+        contract(), report, ev, weakness(), True, 1_800_000_002.0, True
+    )
+
+    assert locked["signal"] == "UP"
+    assert ledger.write_count == 1
+    later = orchestrator._maybe_auto_lock_engine_f(
+        contract(), ForecastReport(
+            signal=Signal.DOWN, confidence=80.0,
+            up_probability=0.2, down_probability=0.8,
+        ), evidence(signal=Signal.DOWN), weakness(), True, 1_800_000_003.0, True
+    )
+    assert later["signal"] == "UP"
+    assert ledger.write_count == 1
+
+
+@pytest.mark.parametrize("forecast,ev,weak,remaining,fresh", [
+    (ForecastReport(signal=Signal.UP, confidence=59.9, up_probability=0.599, down_probability=0.401), Signal.UP, 0.0, 600.0, True),
+    (ForecastReport(signal=Signal.UP, confidence=70.0, up_probability=0.7, down_probability=0.3), Signal.DOWN, 0.0, 600.0, True),
+    (ForecastReport(signal=Signal.UP, confidence=70.0, up_probability=0.7, down_probability=0.3), Signal.UP, 35.1, 600.0, True),
+    (ForecastReport(signal=Signal.UP, confidence=70.0, up_probability=0.7, down_probability=0.3), Signal.UP, 0.0, 120.0, True),
+    (ForecastReport(signal=Signal.UP, confidence=70.0, up_probability=0.7, down_probability=0.3), Signal.UP, 0.0, 600.0, False),
+])
+def test_engine_f_auto_lock_rejects_unqualified_or_late_forecast(forecast, ev, weak, remaining, fresh):
+    ledger = _ForecastLockLedger()
+    orchestrator = _auto_lock_orchestrator(ledger)
+    c = contract().model_copy(update={"seconds_remaining": remaining})
+
+    for n in range(4):
+        assert orchestrator._maybe_auto_lock_engine_f(
+            c, forecast, evidence(signal=ev), weakness(weakness_score=weak),
+            fresh, 1_800_000_000.0 + n, True
+        ) is None
+    assert ledger.write_count == 0
+
+
+def test_engine_f_auto_lock_does_not_persist_during_observation_only_evaluation():
+    ledger = _ForecastLockLedger()
+    orchestrator = _auto_lock_orchestrator(ledger)
+    report = ForecastReport(
+        signal=Signal.UP, confidence=70.0,
+        up_probability=0.7, down_probability=0.3,
+    )
+
+    for n in range(5):
+        assert orchestrator._maybe_auto_lock_engine_f(
+            contract(), report, evidence(signal=Signal.UP), weakness(),
+            True, 1_800_000_000.0 + n, False
+        ) is None
+    assert ledger.write_count == 0
+
