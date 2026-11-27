@@ -50,9 +50,12 @@ def test_coinbase_shadow_feed_requires_confirmation_of_both_requested_channels()
 
 
 def test_brti_exception_diagnostic_includes_empty_timeout_exception_type():
-    detail = MarketDataHub._brti_exception_detail(TimeoutError())
+    detail = MarketDataHub._kalshi_request_exception_detail(TimeoutError(), "BRTI")
 
-    assert detail == "BRTI check error: TimeoutError: TimeoutError()"
+    assert detail == (
+        "BRTI overall request timeout or unclassified timeout error "
+        "(TimeoutError): TimeoutError()"
+    )
 
 
 def test_brti_payload_diagnostic_reports_shape_without_exposing_prices():
