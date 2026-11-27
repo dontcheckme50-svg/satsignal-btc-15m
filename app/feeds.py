@@ -547,64 +547,126 @@ class MarketDataHub:
         return number if 0.0 <= number <= 1.0 else None
 
     async def _kalshi_market_loop(self) -> None:
-        url = f"{settings.kalshi_public_base_url}/markets"
         params = {"series_ticker": "KXBTC15M", "status": "open", "limit": 100}
+        request_timeout = aiohttp.ClientTimeout(
+            total=8.0, connect=3.0, sock_connect=3.0, sock_read=5.0
+        )
         async with aiohttp.ClientSession() as session:
             while self._running:
                 try:
-                    async with session.get(url, params=params, timeout=6) as resp:
-                        if resp.status == 200:
-                            markets = (await resp.json()).get("markets", [])
-                            now = time.time()
-                            candidates = []
-                            for market in markets:
+                    bases = self._kalshi_rest_base_urls(settings.kalshi_public_base_url)
+                    attempt_details = []
+                    response_received = False
+                    for base_index, base_url in enumerate(bases):
+                        url = f"{base_url}/markets"
+                        host = base_url.split("://", 1)[-1].split("/", 1)[0]
+                        started = asyncio.get_running_loop().time()
+                        try:
+                            async with session.get(
+                                url, params=params, timeout=request_timeout
+                            ) as resp:
+                                elapsed = asyncio.get_running_loop().time() - started
+                                if resp.status == 200:
+                                    markets = (await resp.json()).get("markets", [])
+                                    now = time.time()
+                                    candidates = []
+                                    for market in markets:
+                                        try:
+                                            open_ts = self._parse_kalshi_time(market["open_time"])
+                                            close_ts = self._parse_kalshi_time(market["close_time"])
+                                            raw_strike = market.get("floor_strike")
+                                            strike = float(raw_strike)
+                                        except (KeyError, TypeError, ValueError):
+                                            continue
+                                        if not (open_ts <= now < close_ts):
+                                            continue
+                                        if (
+                                            not math.isfinite(strike)
+                                            or strike <= 0
+                                            or not str(market.get("ticker", "")).startswith("KXBTC15M")
+                                        ):
+                                            continue
+                                        candidates.append((close_ts, open_ts, strike, market))
+
+                                    self.last_kalshi_ts = now
+                                    if candidates:
+                                        close_ts, open_ts, strike, market = min(
+                                            candidates, key=lambda item: item[0]
+                                        )
+                                        rem = close_ts - now
+                                        self.kalshi_contract = ContractInfo(
+                                            ticker=market["ticker"],
+                                            strike_price=strike,
+                                            strike_source="KALSHI_OFFICIAL",
+                                            open_timestamp=open_ts,
+                                            close_timestamp=close_ts,
+                                            seconds_remaining=rem,
+                                            checkpoint_seconds_remaining=rem % settings.checkpoint_interval_sec,
+                                            is_official_kalshi=True,
+                                            yes_bid_dollars=self._quote_dollars(market.get("yes_bid_dollars")),
+                                            yes_ask_dollars=self._quote_dollars(market.get("yes_ask_dollars")),
+                                            no_bid_dollars=self._quote_dollars(market.get("no_bid_dollars")),
+                                            no_ask_dollars=self._quote_dollars(market.get("no_ask_dollars")),
+                                        )
+                                        self.kalshi_status_detail = (
+                                            f"Active official contract: {market['ticker']} via {host}"
+                                        )
+                                    else:
+                                        self.kalshi_contract = None
+                                        self.kalshi_status_detail = (
+                                            "No currently active KXBTC15M contract with an official strike"
+                                        )
+                                    response_received = True
+                                    break
+
                                 try:
-                                    open_ts = self._parse_kalshi_time(market["open_time"])
-                                    close_ts = self._parse_kalshi_time(market["close_time"])
-                                    raw_strike = market.get("floor_strike")
-                                    strike = float(raw_strike)
-                                except (KeyError, TypeError, ValueError):
-                                    continue
-
-                                # A market is usable only while its official contract window is active.
-                                if not (open_ts <= now < close_ts):
-                                    continue
-                                if not math.isfinite(strike) or strike <= 0 or not str(market.get("ticker", "")).startswith("KXBTC15M"):
-                                    continue
-                                candidates.append((close_ts, open_ts, strike, market))
-
-                            self.last_kalshi_ts = now
-                            if candidates:
-                                close_ts, open_ts, strike, market = min(candidates, key=lambda item: item[0])
-                                rem = close_ts - now
-                                self.kalshi_contract = ContractInfo(
-                                    ticker=market["ticker"],
-                                    strike_price=strike,
-                                    strike_source="KALSHI_OFFICIAL",
-                                    open_timestamp=open_ts,
-                                    close_timestamp=close_ts,
-                                    seconds_remaining=rem,
-                                    checkpoint_seconds_remaining=rem % settings.checkpoint_interval_sec,
-                                    is_official_kalshi=True,
-                                    yes_bid_dollars=self._quote_dollars(market.get("yes_bid_dollars")),
-                                    yes_ask_dollars=self._quote_dollars(market.get("yes_ask_dollars")),
-                                    no_bid_dollars=self._quote_dollars(market.get("no_bid_dollars")),
-                                    no_ask_dollars=self._quote_dollars(market.get("no_ask_dollars")),
+                                    body = (await resp.text())[:200]
+                                except Exception:
+                                    body = ""
+                                suffix = f": {body}" if body else ""
+                                attempt_details.append(
+                                    f"{host} HTTP {resp.status} after {elapsed:.2f}s{suffix}"
                                 )
-                                self.kalshi_status_detail = f"Active official contract: {market['ticker']}"
-                            else:
-                                self.kalshi_contract = None
-                                self.kalshi_status_detail = "No currently active KXBTC15M contract with an official strike"
-                        else:
-                            self.kalshi_status_detail = f"HTTP {resp.status}"
+                                # Public market-data errors may be host-specific. Try
+                                # the supported alternate host before marking it stale.
+                                retryable = resp.status in (
+                                    401, 403, 408, 429, 500, 502, 503, 504
+                                )
+                                if not retryable or base_index == len(bases) - 1:
+                                    self.kalshi_status_detail = (
+                                        "Kalshi market request failed: " + " | ".join(attempt_details)
+                                    )
+                                    response_received = True
+                                    break
+                        except asyncio.CancelledError:
+                            raise
+                        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                            elapsed = asyncio.get_running_loop().time() - started
+                            detail = self._brti_exception_detail(exc)
+                            attempt_details.append(
+                                f"{host} after {elapsed:.2f}s: {detail}"
+                            )
+                            if base_index == len(bases) - 1:
+                                self.kalshi_status_detail = (
+                                    "Kalshi market request failed on all supported hosts: "
+                                    + " | ".join(attempt_details)
+                                )
+                        except Exception as exc:
+                            elapsed = asyncio.get_running_loop().time() - started
+                            self.kalshi_status_detail = (
+                                f"{host} after {elapsed:.2f}s: {self._brti_exception_detail(exc)}"
+                            )
+                            response_received = True
+                            break
+                    if not response_received and not attempt_details:
+                        self.kalshi_status_detail = "Kalshi market request did not receive a response"
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:
-                    self.kalshi_status_detail = f"Poller error: {e}"
+                except Exception as exc:
+                    self.kalshi_status_detail = self._brti_exception_detail(exc)
                 await asyncio.sleep(3.0)
-
     @staticmethod
-    def _brti_request_base_urls(configured_base_url: str) -> List[str]:
+    def _kalshi_rest_base_urls(configured_base_url: str) -> List[str]:
         """Return the configured production host plus Kalshi's supported compatibility host."""
         primary = str(configured_base_url or "").strip().rstrip("/")
         if not primary:
@@ -650,7 +712,7 @@ class MarketDataHub:
                         "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint),
                         "KALSHI-ACCESS-TIMESTAMP": ts_ms,
                     }
-                    bases = self._brti_request_base_urls(settings.kalshi_prod_base_url)
+                    bases = self._kalshi_rest_base_urls(settings.kalshi_prod_base_url)
                     request_timeout = aiohttp.ClientTimeout(
                         total=6.0, connect=2.5, sock_connect=2.5, sock_read=4.5
                     )
