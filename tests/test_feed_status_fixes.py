@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -96,11 +97,42 @@ def test_brti_request_does_not_override_custom_host():
         "https://custom.example/trade-api/v2"
     ) == ["https://custom.example/trade-api/v2"]
 
+def test_parses_fresh_official_brti_5hz_message():
+    now = 1_800_000_000.25
+    event = {
+        "type": "cfbenchmarks_value_5hz",
+        "msg": {
+            "index_id": "BRTI",
+            "value_usd": "90123.45670000",
+            "source_ts_ms": 1_800_000_000_200,
+            "received_at": 1_800_000_000_220,
+        },
+    }
+
+    parsed = MarketDataHub._parse_brti_5hz_message(event, now=now)
+
+    assert parsed == (90123.4567, 1_800_000_000.2)
+
+
+def test_rejects_non_brti_or_stale_5hz_events():
+    now = 1_800_000_000.0
+    wrong_index = {
+        "type": "cfbenchmarks_value_5hz",
+        "msg": {"index_id": "ETHUSD_RTI", "value_usd": "3000", "source_ts_ms": 1_800_000_000_000},
+    }
+    stale = {
+        "type": "cfbenchmarks_value_5hz",
+        "msg": {"index_id": "BRTI", "value_usd": "90000", "source_ts_ms": 1_799_999_980_000},
+    }
+
+    assert MarketDataHub._parse_brti_5hz_message(wrong_index, now=now) is None
+    assert MarketDataHub._parse_brti_5hz_message(stale, now=now) is None
+
+
 @pytest.mark.asyncio
-async def test_brti_poll_fails_over_to_supported_host_after_timeout(monkeypatch):
+async def test_brti_websocket_fails_over_and_accepts_official_5hz_tick(monkeypatch):
     import asyncio
     from types import SimpleNamespace
-    from cryptography.hazmat.primitives.asymmetric import ed25519
     import app.feeds as feeds
 
     monkeypatch.setattr(
@@ -108,38 +140,60 @@ async def test_brti_poll_fails_over_to_supported_host_after_timeout(monkeypatch)
         "settings",
         SimpleNamespace(
             kalshi_key_id="test-key-id",
-            kalshi_prod_base_url="https://external-api.kalshi.com/trade-api/v2",
             kalshi_private_key=None,
             kalshi_private_key_path=None,
         ),
     )
     hub = MarketDataHub()
-    hub._private_key = ed25519.Ed25519PrivateKey.generate()
+    hub._private_key = feeds.ed25519.Ed25519PrivateKey.generate()
     hub._running = True
-    now_ms = int(time.time() * 1000)
     calls = []
+    subscriptions = []
+    source_ts_ms = int(time.time() * 1000)
 
-    class FakeResponse:
-        status = 200
+    class FakeFrame:
+        type = feeds.aiohttp.WSMsgType.TEXT
 
-        async def json(self):
-            hub._running = False
-            return {"data": {"payload": [{"value": "90001.25", "time": now_ms}]}}
+        def __init__(self, event):
+            self.data = json.dumps(event)
 
+    class FakeWebSocket:
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *_args):
             return False
 
-    class FakeRequest:
+        async def send_json(self, value):
+            subscriptions.append(value)
+
+        def __aiter__(self):
+            async def messages():
+                yield FakeFrame({
+                    "id": 1,
+                    "type": "subscribed",
+                    "msg": {"channel": "cfbenchmarks_value_5hz", "sid": 7},
+                })
+                yield FakeFrame({
+                    "type": "cfbenchmarks_value_5hz",
+                    "msg": {
+                        "index_id": "BRTI",
+                        "value_usd": "90123.45",
+                        "source_ts_ms": source_ts_ms,
+                        "received_at": source_ts_ms + 20,
+                    },
+                })
+                hub._running = False
+            return messages()
+
+    class FakeConnect:
         def __init__(self, should_timeout):
             self.should_timeout = should_timeout
 
         async def __aenter__(self):
             if self.should_timeout:
                 raise asyncio.TimeoutError()
-            return FakeResponse()
+            return FakeWebSocket()
 
         async def __aexit__(self, *_args):
             return False
@@ -151,26 +205,32 @@ async def test_brti_poll_fails_over_to_supported_host_after_timeout(monkeypatch)
         async def __aexit__(self, *_args):
             return False
 
-        def get(self, url, **_kwargs):
-            calls.append(url)
-            return FakeRequest(should_timeout=len(calls) == 1)
-
-    async def no_sleep(_seconds):
-        return None
+        def ws_connect(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeConnect(should_timeout=len(calls) == 1)
 
     monkeypatch.setattr(feeds.aiohttp, "ClientSession", FakeSession)
-    monkeypatch.setattr(feeds.asyncio, "sleep", no_sleep)
 
-    await hub._brti_poll_loop()
+    await hub._brti_websocket_loop()
 
-    assert calls == [
-        "https://external-api.kalshi.com/trade-api/v2/cfbenchmarks/values?id=BRTI",
-        "https://api.elections.kalshi.com/trade-api/v2/cfbenchmarks/values?id=BRTI",
+    assert [item[0] for item in calls] == [
+        "wss://external-api-ws.kalshi.com/trade-api/ws/v2",
+        "wss://api.elections.kalshi.com/trade-api/ws/v2",
     ]
+    assert calls[1][1]["headers"]["KALSHI-ACCESS-KEY"] == "test-key-id"
+    assert calls[1][1]["headers"]["KALSHI-ACCESS-SIGNATURE"]
+    assert subscriptions == [{
+        "id": 1,
+        "cmd": "subscribe",
+        "params": {
+            "channels": ["cfbenchmarks_value_5hz"],
+            "index_ids": ["BRTI"],
+        },
+    }]
     assert hub.brti_status == "LIVE"
-    assert hub.official_brti_price == 90001.25
+    assert hub.official_brti_price == 90123.45
+    assert hub.last_brti_ts == pytest.approx(source_ts_ms / 1000.0)
     assert "api.elections.kalshi.com" in hub.brti_detail
-
 
 @pytest.mark.asyncio
 async def test_kalshi_market_poller_fails_over_to_supported_host_after_timeout(monkeypatch):
