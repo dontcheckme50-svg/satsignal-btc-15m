@@ -642,7 +642,7 @@ class MarketDataHub:
                             raise
                         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
                             elapsed = asyncio.get_running_loop().time() - started
-                            detail = self._brti_exception_detail(exc)
+                            detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
                             attempt_details.append(
                                 f"{host} after {elapsed:.2f}s: {detail}"
                             )
@@ -654,7 +654,7 @@ class MarketDataHub:
                         except Exception as exc:
                             elapsed = asyncio.get_running_loop().time() - started
                             self.kalshi_status_detail = (
-                                f"{host} after {elapsed:.2f}s: {self._brti_exception_detail(exc)}"
+                                f"{host} after {elapsed:.2f}s: {self._kalshi_request_exception_detail(exc, "Kalshi market")}"
                             )
                             response_received = True
                             break
@@ -663,7 +663,7 @@ class MarketDataHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    self.kalshi_status_detail = self._brti_exception_detail(exc)
+                    self.kalshi_status_detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
                 await asyncio.sleep(3.0)
     @staticmethod
     def _kalshi_rest_base_urls(configured_base_url: str) -> List[str]:
@@ -679,10 +679,21 @@ class MarketDataHub:
         alternate = alternates.get(host)
         return [primary, alternate] if alternate and alternate != primary else [primary]
     @staticmethod
-    def _brti_exception_detail(exc: Exception) -> str:
-        """Preserve exception type when str(exc) is empty (for example TimeoutError)."""
+    def _kalshi_request_exception_detail(exc: Exception, source: str) -> str:
+        """Preserve timeout phase and exception type without exposing credentials."""
+        exception_name = type(exc).__name__
+        if exception_name == "ConnectionTimeoutError":
+            phase = "connection establishment"
+        elif exception_name == "SocketTimeoutError":
+            phase = "socket read"
+        elif isinstance(exc, asyncio.TimeoutError):
+            phase = "overall request timeout or unclassified timeout"
+        elif isinstance(exc, aiohttp.ClientConnectorError):
+            phase = "DNS/TCP/TLS connection"
+        else:
+            phase = "request"
         message = str(exc).strip() or repr(exc)
-        return f"BRTI check error: {type(exc).__name__}: {message[:240]}"
+        return f"{source} {phase} error ({exception_name}): {message[:240]}"
 
     @staticmethod
     def _brti_payload_shape_detail(payload) -> str:
@@ -761,20 +772,20 @@ class MarketDataHub:
                         except asyncio.CancelledError:
                             raise
                         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
-                            detail = self._brti_exception_detail(exc)
+                            detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
                             attempt_details.append(f"{host}: {detail}")
                             if base_index == len(bases) - 1:
                                 self.brti_status = "UNAVAILABLE"
                                 self.brti_detail = "BRTI request failed on all supported Kalshi hosts: " + " | ".join(attempt_details)
                         except Exception as exc:
                             self.brti_status = "UNAVAILABLE"
-                            self.brti_detail = f"{host}: {self._brti_exception_detail(exc)}"
+                            self.brti_detail = f"{host}: {self._kalshi_request_exception_detail(exc, "Kalshi market")}"
                             break
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self.brti_status = "UNAVAILABLE"
-                    self.brti_detail = self._brti_exception_detail(exc)
+                    self.brti_detail = self._kalshi_request_exception_detail(exc, "Kalshi market")
                 await asyncio.sleep(2.0)
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
