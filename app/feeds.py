@@ -604,6 +604,19 @@ class MarketDataHub:
                 await asyncio.sleep(3.0)
 
     @staticmethod
+    def _brti_request_base_urls(configured_base_url: str) -> List[str]:
+        """Return the configured production host plus Kalshi's supported compatibility host."""
+        primary = str(configured_base_url or "").strip().rstrip("/")
+        if not primary:
+            primary = "https://external-api.kalshi.com/trade-api/v2"
+        host = primary.split("://", 1)[-1].split("/", 1)[0].lower()
+        alternates = {
+            "external-api.kalshi.com": "https://api.elections.kalshi.com/trade-api/v2",
+            "api.elections.kalshi.com": "https://external-api.kalshi.com/trade-api/v2",
+        }
+        alternate = alternates.get(host)
+        return [primary, alternate] if alternate and alternate != primary else [primary]
+    @staticmethod
     def _brti_exception_detail(exc: Exception) -> str:
         """Preserve exception type when str(exc) is empty (for example TimeoutError)."""
         message = str(exc).strip() or repr(exc)
@@ -628,54 +641,78 @@ class MarketDataHub:
         )
     async def _brti_poll_loop(self) -> None:
         endpoint = "/trade-api/v2/cfbenchmarks/values"
-        url = f"{settings.kalshi_prod_base_url}/cfbenchmarks/values?id=BRTI"
         async with aiohttp.ClientSession() as session:
             while self._running:
                 try:
                     ts_ms = str(int(time.time() * 1000))
-                    headers = {"KALSHI-ACCESS-KEY": settings.kalshi_key_id or "", "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint), "KALSHI-ACCESS-TIMESTAMP": ts_ms}
-                    async with session.get(url, headers=headers, timeout=5) as resp:
-                        if resp.status == 200:
-                            payload = await resp.json()
-                            parsed = self._parse_brti_payload(payload)
-                            if parsed:
-                                value, source_ts = parsed
-                                if source_ts != self._last_brti_source_ts or value != self._last_brti_value:
-                                    self.official_brti_price = value
-                                    self.last_brti_ts = source_ts
-                                    self.brti_status = "LIVE"
-                                    self.brti_detail = "Official CF Benchmarks BRTI"
-                                    self._last_brti_source_ts, self._last_brti_value = source_ts, value
-                                else:
-                                    self.brti_status = "STALE"
-                                    self.brti_detail = "BRTI source value/timestamp has not advanced"
-                            else:
+                    headers = {
+                        "KALSHI-ACCESS-KEY": settings.kalshi_key_id or "",
+                        "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", endpoint),
+                        "KALSHI-ACCESS-TIMESTAMP": ts_ms,
+                    }
+                    bases = self._brti_request_base_urls(settings.kalshi_prod_base_url)
+                    request_timeout = aiohttp.ClientTimeout(
+                        total=6.0, connect=2.5, sock_connect=2.5, sock_read=4.5
+                    )
+                    attempt_details = []
+                    for base_index, base_url in enumerate(bases):
+                        url = f"{base_url}/cfbenchmarks/values?id=BRTI"
+                        host = base_url.split("://", 1)[-1].split("/", 1)[0]
+                        try:
+                            async with session.get(
+                                url, headers=headers, timeout=request_timeout
+                            ) as resp:
+                                if resp.status == 200:
+                                    payload = await resp.json()
+                                    parsed = self._parse_brti_payload(payload)
+                                    if parsed:
+                                        value, source_ts = parsed
+                                        if source_ts != self._last_brti_source_ts or value != self._last_brti_value:
+                                            self.official_brti_price = value
+                                            self.last_brti_ts = source_ts
+                                            self.brti_status = "LIVE"
+                                            self.brti_detail = f"Official CF Benchmarks BRTI via {host}"
+                                            self._last_brti_source_ts, self._last_brti_value = source_ts, value
+                                        else:
+                                            self.brti_status = "STALE"
+                                            self.brti_detail = "BRTI source value/timestamp has not advanced"
+                                    else:
+                                        self.brti_status = "UNAVAILABLE"
+                                        self.brti_detail = self._brti_payload_shape_detail(payload)
+                                    break
+                                try:
+                                    body = (await resp.text())[:240]
+                                except Exception:
+                                    body = ""
+                                suffix = f": {body}" if body else ""
+                                attempt_details.append(f"{host} HTTP {resp.status}{suffix}")
+                                if resp.status in (401, 403):
+                                    self.brti_status = "UNAVAILABLE"
+                                    self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}: authentication or entitlement denied{suffix}"
+                                    return
+                                # A 503 can represent a CF upstream timeout; retry once on
+                                # Kalshi's officially supported alternate production host.
+                                if resp.status not in (408, 429, 500, 502, 503, 504) or base_index == len(bases) - 1:
+                                    self.brti_status = "UNAVAILABLE"
+                                    self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}{suffix}"
+                        except asyncio.CancelledError:
+                            raise
+                        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                            detail = self._brti_exception_detail(exc)
+                            attempt_details.append(f"{host}: {detail}")
+                            if base_index == len(bases) - 1:
                                 self.brti_status = "UNAVAILABLE"
-                                self.brti_detail = self._brti_payload_shape_detail(payload)
-                        elif resp.status in (401, 403):
-                            try:
-                                body = (await resp.text())[:240]
-                            except Exception:
-                                body = ""
-                            suffix = f"; response={body}" if body else ""
+                                self.brti_detail = "BRTI request failed on all supported Kalshi hosts: " + " | ".join(attempt_details)
+                        except Exception as exc:
                             self.brti_status = "UNAVAILABLE"
-                            self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}: authentication or entitlement denied{suffix}"
-                            return
-                        else:
-                            try:
-                                body = (await resp.text())[:240]
-                            except Exception:
-                                body = ""
-                            suffix = f": {body}" if body else ""
-                            self.brti_status = "UNAVAILABLE"
-                            self.brti_detail = f"Kalshi CF Benchmarks HTTP {resp.status}{suffix}"
+                            self.brti_detail = f"{host}: {self._brti_exception_detail(exc)}"
+                            break
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:
+                except Exception as exc:
                     self.brti_status = "UNAVAILABLE"
-                    self.brti_detail = self._brti_exception_detail(e)
+                    self.brti_detail = self._brti_exception_detail(exc)
                 await asyncio.sleep(2.0)
-
     def get_feed_statuses(self) -> List[FeedStatus]:
         now = time.time()
         def status_for(ts):
