@@ -703,6 +703,45 @@ class MarketDataHub:
             return None
         return value, source_ts
     @staticmethod
+    def _brti_ws_indexlist_has_brti(event, channel: str) -> Optional[bool]:
+        """Return whether an indexlist response advertises BRTI; None means not an indexlist."""
+        if not isinstance(event, dict) or event.get("type") != f"{channel}_indexlist":
+            return None
+        msg = event.get("msg")
+        if not isinstance(msg, dict):
+            return False
+        index_ids = msg.get("index_ids")
+        return isinstance(index_ids, list) and "BRTI" in index_ids
+
+    @classmethod
+    def _parse_brti_ws_message(cls, event, channel: str, now: Optional[float] = None):
+        """Parse official BRTI ticks from either the 5Hz or standard value channel."""
+        if not isinstance(event, dict) or event.get("type") != channel:
+            return None
+        if channel == "cfbenchmarks_value_5hz":
+            return cls._parse_brti_5hz_message(event, now=now)
+        if channel != "cfbenchmarks_value":
+            return None
+        msg = event.get("msg")
+        if not isinstance(msg, dict) or msg.get("index_id") != "BRTI":
+            return None
+        raw = msg.get("data")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+        if not isinstance(raw, dict) or raw.get("id") != "BRTI":
+            return None
+        value = cls._parse_brti_value(raw.get("value"))
+        source_ts = cls._parse_exchange_timestamp(raw.get("time"))
+        current = time.time() if now is None else float(now)
+        if value is None or source_ts is None:
+            return None
+        if source_ts > current + 0.5 or current - source_ts > 10.0:
+            return None
+        return value, source_ts
+    @staticmethod
     def _kalshi_request_exception_detail(exc: Exception, source: str) -> str:
         """Preserve timeout phase and exception type without exposing credentials."""
         exception_name = type(exc).__name__
@@ -737,108 +776,128 @@ class MarketDataHub:
             f"first_row_fields={first_keys}"
         )
     async def _brti_websocket_loop(self) -> None:
-        """Stream official BRTI from Kalshi's authenticated 5Hz WebSocket channel."""
+        """Stream official BRTI; verify subscription/index availability before waiting for ticks."""
         signed_path = "/trade-api/ws/v2"
         urls = self._kalshi_ws_urls()
+        # Keep 5Hz as the primary official BRTI source; use the authenticated
+        # standard one-second CF Benchmarks channel only if 5Hz is unavailable.
+        channels = ("cfbenchmarks_value_5hz", "cfbenchmarks_value")
         backoff_seconds = 1.0
         async with aiohttp.ClientSession() as session:
             while self._running:
                 attempt_details = []
-                for url in urls:
-                    host = url.split("://", 1)[-1].split("/", 1)[0]
-                    ts_ms = str(int(time.time() * 1000))
-                    headers = {
-                        "KALSHI-ACCESS-KEY": settings.kalshi_key_id or "",
-                        "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", signed_path),
-                        "KALSHI-ACCESS-TIMESTAMP": ts_ms,
-                    }
-                    try:
-                        async with session.ws_connect(
-                            url,
-                            headers=headers,
-                            heartbeat=15.0,
-                            receive_timeout=15.0,
-                            timeout=10.0,
-                            autoping=True,
-                        ) as ws:
-                            self.brti_detail = (
-                                f"Connected to official Kalshi BRTI 5Hz stream via {host}; waiting for first tick"
-                            )
-                            await ws.send_json({
-                                "id": 1,
-                                "cmd": "subscribe",
-                                "params": {
-                                    "channels": ["cfbenchmarks_value_5hz"],
-                                    "index_ids": ["BRTI"],
-                                },
-                            })
-                            async for frame in ws:
+                connected_to_tick_stream = False
+                for channel in channels:
+                    for url in urls:
+                        if not self._running:
+                            return
+                        host = url.split("://", 1)[-1].split("/", 1)[0]
+                        ts_ms = str(int(time.time() * 1000))
+                        headers = {
+                            "KALSHI-ACCESS-KEY": settings.kalshi_key_id or "",
+                            "KALSHI-ACCESS-SIGNATURE": self.sign_kalshi(ts_ms, "GET", signed_path),
+                            "KALSHI-ACCESS-TIMESTAMP": ts_ms,
+                        }
+                        stage = "WebSocket handshake"
+                        try:
+                            async with session.ws_connect(
+                                url, headers=headers, heartbeat=15.0,
+                                receive_timeout=15.0, timeout=10.0, autoping=True,
+                            ) as ws:
+                                stage = "subscription acknowledgement"
+                                self.brti_detail = f"Connected to Kalshi {channel} via {host}; awaiting subscription acknowledgement"
+                                await ws.send_json({
+                                    "id": 1, "cmd": "subscribe",
+                                    "params": {"channels": [channel], "index_ids": ["BRTI"]},
+                                })
+                                subscribed_sid = None
+                                indexlist_confirmed = False
+                                last_tick_mono = None
+                                while self._running:
+                                    if subscribed_sid is None:
+                                        timeout = 4.0
+                                        stage = "subscription acknowledgement"
+                                    elif not indexlist_confirmed:
+                                        timeout = 4.0
+                                        stage = "BRTI indexlist response"
+                                    elif last_tick_mono is None:
+                                        timeout = 6.0 if channel == "cfbenchmarks_value" else 4.0
+                                        stage = "first BRTI source tick"
+                                    else:
+                                        timeout = 15.0
+                                        stage = "next BRTI source tick"
+                                    frame = await ws.receive(timeout=timeout)
+                                    if frame.type == aiohttp.WSMsgType.TEXT:
+                                        try:
+                                            event = json.loads(frame.data)
+                                        except (TypeError, ValueError):
+                                            continue
+                                        event_type = event.get("type") if isinstance(event, dict) else None
+                                        if event_type == "error":
+                                            error_msg = event.get("msg")
+                                            raise RuntimeError(f"Kalshi {channel} subscription error: {str(error_msg)[:200]}")
+                                        if event_type == "subscribed":
+                                            msg = event.get("msg") if isinstance(event.get("msg"), dict) else {}
+                                            if msg.get("channel") != channel:
+                                                continue
+                                            subscribed_sid = msg.get("sid", event.get("sid"))
+                                            if subscribed_sid is None:
+                                                raise RuntimeError(f"Kalshi acknowledged {channel} without a subscription ID")
+                                            stage = "BRTI indexlist request"
+                                            self.brti_detail = f"Subscribed to {channel} via {host}; verifying BRTI availability"
+                                            await ws.send_json({
+                                                "id": 2, "cmd": "update_subscription",
+                                                "params": {"sid": subscribed_sid, "action": "indexlist"},
+                                            })
+                                            continue
+                                        has_brti = self._brti_ws_indexlist_has_brti(event, channel)
+                                        if has_brti is not None:
+                                            if not has_brti:
+                                                raise RuntimeError(f"Kalshi {channel} indexlist does not currently include BRTI")
+                                            indexlist_confirmed = True
+                                            stage = "first BRTI source tick"
+                                            self.brti_detail = f"BRTI confirmed in {channel} indexlist via {host}; waiting for first tick"
+                                            continue
+                                        parsed = self._parse_brti_ws_message(event, channel)
+                                        if parsed is None:
+                                            continue
+                                        value, source_ts = parsed
+                                        if self._last_brti_source_ts is not None and source_ts <= self._last_brti_source_ts:
+                                            continue
+                                        self.official_brti_price = value
+                                        self.last_brti_ts = source_ts
+                                        self.brti_status = "LIVE"
+                                        label = "5Hz" if channel == "cfbenchmarks_value_5hz" else "1Hz fallback"
+                                        self.brti_detail = f"Official CF Benchmarks BRTI {label} via {host}"
+                                        self._last_brti_source_ts = source_ts
+                                        self._last_brti_value = value
+                                        last_tick_mono = asyncio.get_running_loop().time()
+                                        backoff_seconds = 1.0
+                                    elif frame.type == aiohttp.WSMsgType.ERROR:
+                                        raise ws.exception() or RuntimeError(f"Kalshi {channel} WebSocket frame error")
+                                    elif frame.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
+                                        raise RuntimeError(f"Kalshi {channel} WebSocket closed during {stage}")
+                                    else:
+                                        continue
                                 if not self._running:
                                     return
-                                if frame.type == aiohttp.WSMsgType.TEXT:
-                                    try:
-                                        event = json.loads(frame.data)
-                                    except (TypeError, ValueError):
-                                        continue
-                                    event_type = event.get("type") if isinstance(event, dict) else None
-                                    if event_type == "error":
-                                        error_msg = event.get("msg")
-                                        raise RuntimeError(
-                                            f"Kalshi BRTI WebSocket subscription error: {str(error_msg)[:200]}"
-                                        )
-                                    if event_type == "subscribed":
-                                        subscribed_channel = (event.get("msg") or {}).get("channel")
-                                        if subscribed_channel == "cfbenchmarks_value_5hz":
-                                            self.brti_detail = (
-                                                f"Subscribed to official BRTI 5Hz stream via {host}; waiting for tick"
-                                            )
-                                        continue
-                                    if event_type != "cfbenchmarks_value_5hz":
-                                        continue
-                                    parsed = self._parse_brti_5hz_message(event)
-                                    if parsed is None:
-                                        continue
-                                    value, source_ts = parsed
-                                    if (
-                                        self._last_brti_source_ts is not None
-                                        and source_ts <= self._last_brti_source_ts
-                                    ):
-                                        continue
-                                    self.official_brti_price = value
-                                    self.last_brti_ts = source_ts
-                                    self.brti_status = "LIVE"
-                                    self.brti_detail = f"Official CF Benchmarks BRTI 5Hz via {host}"
-                                    self._last_brti_source_ts = source_ts
-                                    self._last_brti_value = value
-                                    backoff_seconds = 1.0
-                                elif frame.type == aiohttp.WSMsgType.ERROR:
-                                    raise ws.exception() or RuntimeError("Kalshi BRTI WebSocket frame error")
-                                elif frame.type in (
-                                    aiohttp.WSMsgType.CLOSE,
-                                    aiohttp.WSMsgType.CLOSED,
-                                    aiohttp.WSMsgType.CLOSING,
-                                ):
-                                    break
-                        if self._running:
-                            raise RuntimeError("Kalshi BRTI WebSocket closed")
-                        return
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        detail = self._kalshi_request_exception_detail(exc, "BRTI WebSocket")
-                        attempt_details.append(f"{host}: {detail}")
-                        self.brti_detail = "BRTI stream reconnecting: " + " | ".join(attempt_details)
-                        if self.official_brti_price is None:
-                            self.brti_status = "UNAVAILABLE"
-                        # When a previous official tick exists, leave brti_status LIVE;
-                        # get_feed_statuses will downgrade it to STALE using its source age.
+                                raise RuntimeError(f"BRTI worker stopped during {stage}")
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            detail = self._kalshi_request_exception_detail(exc, f"BRTI {channel} {stage}")
+                            attempt_details.append(f"{host}: {detail}")
+                            self.brti_detail = "BRTI stream reconnecting: " + " | ".join(attempt_details)
+                            if self.official_brti_price is None:
+                                self.brti_status = "UNAVAILABLE"
+                            # Do not mark a connected-but-unsubscribed socket LIVE.
+                            # A prior official tick is downgraded by source-age checks.
                 if self._running:
-                    if attempt_details:
-                        self.brti_detail = (
-                            "BRTI WebSocket unavailable on all supported hosts; "
-                            + " | ".join(attempt_details)
-                            + f"; reconnecting in {backoff_seconds:.0f}s"
-                        )
+                    self.brti_detail = (
+                        "BRTI 5Hz and standard WebSocket attempts failed; "
+                        + " | ".join(attempt_details)
+                        + f"; reconnecting in {backoff_seconds:.0f}s"
+                    )
                     await asyncio.sleep(backoff_seconds)
                     backoff_seconds = min(backoff_seconds * 2.0, 20.0)
     def get_feed_statuses(self) -> List[FeedStatus]:
