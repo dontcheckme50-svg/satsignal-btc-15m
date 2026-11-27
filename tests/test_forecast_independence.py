@@ -289,3 +289,33 @@ def test_engine_f_auto_lock_does_not_persist_during_observation_only_evaluation(
         ) is None
     assert ledger.write_count == 0
 
+def test_engine_f_lock_is_in_settlement_queue_and_graded_by_verified_outcome():
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-ENGINEF-SETTLE-" + uuid.uuid4().hex[:10]
+    ledger.record_forecast_lock({
+        "contract_ticker": ticker,
+        "timestamp_iso": "2026-11-24 12:05:00 UTC",
+        "epoch_ts": 1795541100.0,
+        "signal": "UP",
+        "confidence": 72.0,
+        "up_prob": 0.72,
+        "down_prob": 0.28,
+        "strike_price": 100000.0,
+        "btc_price_at_lock": 100010.0,
+    })
+
+    assert ticker in ledger.get_unsettled_contract_tickers()
+    # Verified Kalshi outcome is authoritative; no settlement price is required.
+    ledger.settle_contract(
+        ticker,
+        settlement_price=None,
+        official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    )
+
+    lock = ledger.get_forecast_lock(ticker)
+    assert lock["settled"] == 1
+    assert lock["actual_outcome"] == "UP"
+    assert lock["won"] == 1
+    assert lock["settlement_source"] == "KALSHI_VERIFIED"
+
