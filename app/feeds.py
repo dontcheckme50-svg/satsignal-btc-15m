@@ -83,11 +83,12 @@ def _safe_key_input_summary(source: str, raw: str, normalized: str) -> str:
     raw_footer = bool(re.search(r"-----END [A-Z0-9 ]+PRIVATE KEY-----", raw))
     norm_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]+PRIVATE KEY-----", normalized))
     norm_footer = bool(re.search(r"-----END [A-Z0-9 ]+PRIVATE KEY-----", normalized))
+    raw_newlines = raw.count(chr(10)) + raw.count(chr(13))
+    escaped_newlines = raw.count("\\n") + raw.count("\\r")
     return (
         f"{source}: chars={len(raw)}, raw_header={raw_header}, raw_footer={raw_footer}, "
         f"normalized_header={norm_header}, normalized_footer={norm_footer}, "
-        f"raw_newlines={raw.count(chr(10)) + raw.count(chr(13))}, "
-        f"escaped_newlines={raw.count(r'\n') + raw.count(r'\r')}, "
+        f"raw_newlines={raw_newlines}, escaped_newlines={escaped_newlines}, "
         f"normalized_lines={len(normalized.splitlines())}"
     )
 
