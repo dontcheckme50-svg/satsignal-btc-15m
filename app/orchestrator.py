@@ -21,6 +21,10 @@ class PredictorOrchestrator:
         self.early_engine = EarlyPredictionEngine()
         self.final_engine = FinalDecisionEngine()
         self.forecast_engine = ForecastEngine()
+        # Engine F auto-lock qualification is intentionally separate from Engine E.
+        self._engine_f_lock_candidate_ticker: Optional[str] = None
+        self._engine_f_lock_candidate: Signal = Signal.WAIT
+        self._engine_f_lock_candidate_count: int = 0
         self.active_contract: Optional[ContractInfo] = None
         # A directional lock requires two consecutive one-second decisions
         # for the same official contract and direction.
@@ -52,6 +56,70 @@ class PredictorOrchestrator:
         self._directional_lock_candidate_ticker = None
         self._directional_lock_candidate = Signal.WAIT
         self._directional_lock_candidate_count = 0
+
+    def _reset_engine_f_lock_candidate(self) -> None:
+        self._engine_f_lock_candidate_ticker = None
+        self._engine_f_lock_candidate = Signal.WAIT
+        self._engine_f_lock_candidate_count = 0
+
+    def _maybe_auto_lock_engine_f(
+        self,
+        contract: ContractInfo,
+        forecast: ForecastReport,
+        ev,
+        weakness,
+        inputs_fresh: bool,
+        now: float,
+        record_to_db: bool,
+    ) -> Optional[dict]:
+        """Persist F's first stable, evidence-qualified direction for an official contract."""
+        if not record_to_db:
+            return None
+        if not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
+            self._reset_engine_f_lock_candidate()
+            return None
+        existing = self.ledger.get_forecast_lock(contract.ticker)
+        if existing:
+            self._reset_engine_f_lock_candidate()
+            return existing
+
+        qualified = (
+            inputs_fresh
+            and not weakness.feed_degraded
+            and weakness.weakness_score <= 35.0
+            and forecast.signal in (Signal.UP, Signal.DOWN)
+            and ev.signal == forecast.signal
+            and forecast.confidence >= 60.0
+            and contract.seconds_remaining > 120.0
+        )
+        if not qualified:
+            self._reset_engine_f_lock_candidate()
+            return None
+
+        if (
+            self._engine_f_lock_candidate_ticker == contract.ticker
+            and self._engine_f_lock_candidate == forecast.signal
+        ):
+            self._engine_f_lock_candidate_count += 1
+        else:
+            self._engine_f_lock_candidate_ticker = contract.ticker
+            self._engine_f_lock_candidate = forecast.signal
+            self._engine_f_lock_candidate_count = 1
+
+        if self._engine_f_lock_candidate_count < 3:
+            return None
+
+        return self.ledger.record_forecast_lock({
+            "contract_ticker": contract.ticker,
+            "timestamp_iso": iso_now(now),
+            "epoch_ts": now,
+            "signal": forecast.signal.value,
+            "confidence": forecast.confidence,
+            "up_prob": forecast.up_probability,
+            "down_prob": forecast.down_probability,
+            "strike_price": contract.strike_price,
+            "btc_price_at_lock": ev.live_price,
+        })
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -135,6 +203,7 @@ class PredictorOrchestrator:
             # Start a fresh shadow-history cadence for each official contract.
             self.last_multi_exchange_logged_ts = 0.0
             self._reset_directional_lock_candidate()
+            self._reset_engine_f_lock_candidate()
         self.active_contract = new_contract
         spot_age = safe_age_seconds(self.hub.last_spot_ts, ts)
         book_age = safe_age_seconds(self.hub.last_book_ts, ts)
@@ -221,6 +290,9 @@ class PredictorOrchestrator:
         # Engine F is an independent forecast; it does not alter Engine E's
         # official prediction lock or the paper execution decision.
         forecast = self.forecast_engine.forecast(ev, weakness, new_contract)
+        self._maybe_auto_lock_engine_f(
+            new_contract, forecast, ev, weakness, engine_inputs_fresh, ts, record_to_db
+        )
         self.latest_baseline_z_prob = float(norm.cdf(EvidenceEngine._strike_z_score(live_price, new_contract.strike_price, new_contract.seconds_remaining, ev.volatility_annualized)))
         if record_to_db and new_contract.is_official_kalshi and (self.last_logged_ts == 0.0 or ts - self.last_logged_ts >= 30.0):
             # Save changing engine state as an observation, not a scored prediction.
