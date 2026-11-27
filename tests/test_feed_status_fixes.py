@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.feeds import MarketDataHub
 from app.multi_exchange import MultiExchangeReference
@@ -181,6 +181,9 @@ async def test_kalshi_market_poller_fails_over_to_supported_host_after_timeout(m
         SimpleNamespace(
             kalshi_public_base_url="https://api.elections.kalshi.com/trade-api/v2",
             checkpoint_interval_sec=180,
+            kalshi_key_id=None,
+            kalshi_private_key=None,
+            kalshi_private_key_path=None,
         ),
     )
     hub = MarketDataHub()
