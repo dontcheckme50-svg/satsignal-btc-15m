@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from app.feeds import MarketDataHub
 from app.multi_exchange import MultiExchangeReference
 
