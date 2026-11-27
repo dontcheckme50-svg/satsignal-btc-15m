@@ -1,4 +1,4 @@
-import asyncio, base64, json, math, time
+import asyncio, base64, json, math, re, time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Deque, List, Optional, Tuple
@@ -8,6 +8,90 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 from app.config import settings
 from app.models import ContractInfo, FeedStatus
 from app.multi_exchange import MultiExchangeReference
+
+def normalize_kalshi_private_key_text(value: str) -> str:
+    """Normalize common environment-secret encodings without logging key material."""
+    text = value.lstrip("\ufeff").strip()
+
+    # Secret managers may serialize newline escapes more than once.
+    for _ in range(4):
+        previous = text
+        text = (
+            text.replace(r"\\r\\n", r"\r\n")
+                .replace(r"\\n", r"\n")
+                .replace(r"\\r", r"\r")
+                .replace(r"\u000d\u000a", r"\r\n")
+                .replace(r"\u000a", r"\n")
+                .replace(r"\u000d", r"\r")
+        )
+        if text == previous:
+            break
+
+    # Remove repeated matching quote wrappers left by JSON/secret UIs.
+    for _ in range(3):
+        text = text.strip()
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+            text = text[1:-1].strip()
+        else:
+            break
+
+    text = (
+        text.replace(r"\r\n", "\n")
+            .replace(r"\n", "\n")
+            .replace(r"\r", "\n")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+    ).strip()
+
+    # Some secret stores expose the complete PEM as a base64 string.
+    if "-----BEGIN " not in text:
+        try:
+            decoded = base64.b64decode(text, validate=True).decode("utf-8")
+        except Exception:
+            decoded = ""
+        if "-----BEGIN " in decoded:
+            text = decoded.strip()
+
+    # Rebuild PEM line wrapping if a host flattened all line breaks.
+    # Preserve traditional encrypted-PEM metadata blocks untouched.
+    match = re.fullmatch(
+        r"\s*-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----\s*(.*?)\s*-----END \1-----\s*",
+        text,
+        flags=re.DOTALL,
+    )
+    if match:
+        label, body = match.groups()
+        if not body.lstrip().startswith(("Proc-Type:", "DEK-Info:")):
+            compact_body = re.sub(r"\s+", "", body)
+            if (
+                compact_body
+                and len(compact_body) % 4 == 0
+                and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", compact_body)
+            ):
+                wrapped = "\n".join(
+                    compact_body[index:index + 64]
+                    for index in range(0, len(compact_body), 64)
+                )
+                text = f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
+
+    return text
+
+
+def _safe_key_input_summary(source: str, raw: str, normalized: str) -> str:
+    """Return key-format diagnostics only; never include secret content."""
+    raw_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", raw))
+    raw_footer = bool(re.search(r"-----END [A-Z0-9 ]*PRIVATE KEY-----", raw))
+    norm_header = bool(re.search(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", normalized))
+    norm_footer = bool(re.search(r"-----END [A-Z0-9 ]*PRIVATE KEY-----", normalized))
+    raw_newlines = raw.count(chr(10)) + raw.count(chr(13))
+    escaped_newlines = raw.count("\\n") + raw.count("\\r")
+    return (
+        f"{source}: chars={len(raw)}, raw_header={raw_header}, raw_footer={raw_footer}, "
+        f"normalized_header={norm_header}, normalized_footer={norm_footer}, "
+        f"raw_newlines={raw_newlines}, escaped_newlines={escaped_newlines}, "
+        f"normalized_lines={len(normalized.splitlines())}"
+    )
+
 
 def iso_now(ts: Optional[float] = None) -> str:
     t = ts if ts is not None else time.time()
@@ -76,28 +160,7 @@ class MarketDataHub:
         candidates = []
         direct_value = settings.kalshi_private_key
         if isinstance(direct_value, str) and direct_value.strip():
-            # Host providers commonly expose multiline PEM values either with
-            # real newlines or escaped \\n sequences.
-            normalized = direct_value.lstrip("\ufeff").strip()
-
-            # Some secret dashboards preserve enclosing quotes and/or Windows
-            # line endings when a PEM is pasted into an environment variable.
-            if (
-                len(normalized) >= 2
-                and normalized[0] == normalized[-1]
-                and normalized[0] in ("'", '"')
-            ):
-                normalized = normalized[1:-1].strip()
-
-            normalized = (
-                normalized
-                .replace("\\r\\n", "\n")
-                .replace("\\n", "\n")
-                .replace("\\r", "\n")
-                .replace("\r\n", "\n")
-                .replace("\r", "\n")
-                .strip()
-            )
+            normalized = normalize_kalshi_private_key_text(direct_value)
             candidates.append(("KALSHI_PRIVATE_KEY", normalized.encode("utf-8")))
 
         key_path = settings.kalshi_private_key_path
@@ -131,7 +194,10 @@ class MarketDataHub:
             if pem_data is None:
                 continue
             try:
-                key = serialization.load_pem_private_key(pem_data, password=None)
+                if b"-----BEGIN OPENSSH PRIVATE KEY-----" in pem_data:
+                    key = serialization.load_ssh_private_key(pem_data, password=None)
+                else:
+                    key = serialization.load_pem_private_key(pem_data, password=None)
                 if not isinstance(key, (ed25519.Ed25519PrivateKey, rsa.RSAPrivateKey)):
                     raise TypeError("unsupported key type; expected Ed25519 or RSA")
                 self.brti_detail = f"Kalshi private key loaded from {source}"
@@ -139,7 +205,13 @@ class MarketDataHub:
             except Exception as exc:
                 # Do not include key material in diagnostics. Source and parser
                 # error are sufficient to diagnose format/algorithm failures.
-                errors.append(f"{source}: {type(exc).__name__}: {exc}")
+                raw_value = direct_value if source == "KALSHI_PRIVATE_KEY" else ""
+                summary = (
+                    _safe_key_input_summary(source, raw_value, normalized)
+                    if raw_value else source
+                )
+                # Parser diagnostics disclose only structure, never key bytes.
+                errors.append(f"{summary}: {type(exc).__name__}: {str(exc)[:180]}")
 
         self.brti_detail = "Kalshi private key could not be loaded: " + " | ".join(errors)
         return None
@@ -149,7 +221,7 @@ class MarketDataHub:
         if isinstance(self._private_key, ed25519.Ed25519PrivateKey):
             sig = self._private_key.sign(msg)
         else:
-            sig = self._private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH), hashes.SHA256())
+            sig = self._private_key.sign(msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
         return base64.b64encode(sig).decode("utf-8")
 
     def ingest_trade(self, ts: float, price: float, qty: float, is_buyer_maker: bool, source: str) -> bool:
