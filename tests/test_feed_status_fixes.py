@@ -65,3 +65,26 @@ def test_brti_payload_diagnostic_reports_shape_without_exposing_prices():
     assert "rows=1" in detail
     assert "first_row_fields=['time', 'value']" in detail
     assert "12345.67" not in detail
+
+def test_brti_request_uses_kalshi_supported_compatibility_host_on_fallback():
+    assert MarketDataHub._brti_request_base_urls(
+        "https://external-api.kalshi.com/trade-api/v2"
+    ) == [
+        "https://external-api.kalshi.com/trade-api/v2",
+        "https://api.elections.kalshi.com/trade-api/v2",
+    ]
+
+
+def test_brti_request_fallback_order_is_reversible_for_legacy_host():
+    assert MarketDataHub._brti_request_base_urls(
+        "https://api.elections.kalshi.com/trade-api/v2/"
+    ) == [
+        "https://api.elections.kalshi.com/trade-api/v2",
+        "https://external-api.kalshi.com/trade-api/v2",
+    ]
+
+
+def test_brti_request_does_not_override_custom_host():
+    assert MarketDataHub._brti_request_base_urls(
+        "https://custom.example/trade-api/v2"
+    ) == ["https://custom.example/trade-api/v2"]
