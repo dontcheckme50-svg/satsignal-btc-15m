@@ -20,7 +20,7 @@ class Settings:
     # Supabase PostgreSQL is the only supported persistence backend.
     database_url: str | None = os.getenv("DATABASE_URL") or None
 
-    kalshi_public_base_url: str = os.getenv("KALSHI_PUBLIC_BASE_URL", "https://api.elections.kalshi.com/trade-api/v2")
+    kalshi_public_base_url: str = os.getenv("KALSHI_PUBLIC_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
     kalshi_demo_base_url: str = os.getenv("KALSHI_DEMO_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     kalshi_prod_base_url: str = os.getenv("KALSHI_PROD_BASE_URL", "https://external-api.kalshi.com/trade-api/v2")
     kalshi_key_id: str | None = os.getenv("KALSHI_KEY_ID") or None
