@@ -221,7 +221,7 @@ class PredictionLedger:
             with self._connection() as conn:
                 conn.execute("SELECT 1").fetchone()
                 counts = {}
-                for table in ("predictions", "prediction_observations", "forecast_locks", "trades", "multi_exchange_reference"):
+                for table in ("predictions", "early_predictions", "prediction_observations", "forecast_locks", "trades", "multi_exchange_reference"):
                     counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             return {
                 "status": "HEALTHY",
