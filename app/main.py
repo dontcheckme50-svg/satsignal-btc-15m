@@ -362,7 +362,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Predictions / Pending</span><span id="sb-total">0 / 0</span></div>
       <div class="kv"><span>Final Engine (W / L / Accuracy)</span><span id="sb-final">0 / 0 / --</span></div>
       <div class="kv"><span>Main Engine (W / L / Accuracy)</span><span id="sb-main">0 / 0 / --</span></div>
-      <div class="kv"><span>Early Engine (W / L / Accuracy)</span><span id="sb-early">0 / 0 / --</span></div>
+      <div class="kv"><span>Early Engine Checkpoint (W / L / Accuracy)</span><span id="sb-early">0 / 0 / --</span></div>
       <div class="kv"><span>Brier Calibration Score</span><span id="sb-brier">Awaiting verified settlements</span></div>
       <div class="kv"><span>Protective WAITs</span><span id="sb-waits">0</span></div>
     </div>
