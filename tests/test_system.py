@@ -247,7 +247,6 @@ def test_dashboard_countdown_uses_monotonic_server_clock_sync():
 @pytest.mark.asyncio
 async def test_orchestrator_survives_prediction_cycle_exception(monkeypatch, tmp_path):
     from app.orchestrator import PredictorOrchestrator
-
     ledger = PredictionLedger()
     orchestrator = PredictorOrchestrator(MarketDataHub(), ledger)
     calls = {"evaluate": 0}
@@ -497,8 +496,7 @@ def test_evidence_engine_excludes_future_and_pre_contract_trades_and_bars():
 
 
 
-def test_feed_status_marks_future_timestamps_invalid():
-    hub = MarketDataHub()
+def test_feed_status_marks_future_timestamps_invalid():    hub = MarketDataHub()
     future = time.time() + 5.0
     hub.last_spot_ts = future
     hub.active_spot_source = "BINANCE_SPOT"
@@ -747,7 +745,6 @@ async def test_primary_spot_stream_clean_close_is_backed_off(monkeypatch):
     monkeypatch.setattr("app.feeds.asyncio.sleep", stop_after_backoff)
 
     await hub._spot_stream_loop()
-
     assert calls == {"worker": 1, "sleep": 1}
 
 
@@ -997,8 +994,7 @@ async def test_prediction_loop_does_not_wait_for_settlement_worker(monkeypatch, 
     cycles = {"count": 0}
     settlement = {"started": False, "completed": False}
 
-    fake_snapshot = SimpleNamespace(
-        contract=SimpleNamespace(ticker="KXBTC15M-CURRENT"),
+    fake_snapshot = SimpleNamespace(        contract=SimpleNamespace(ticker="KXBTC15M-CURRENT"),
         evidence=SimpleNamespace(live_price=90000.0),
         final=SimpleNamespace(signal=Signal.WAIT),
         scoreboard=None,
@@ -1247,8 +1243,7 @@ def test_brti_cohort_is_preserved_and_performance_uses_settled_directional_locks
         confidence=75.0,
         up_prob=0.75,
         down_prob=0.25,
-        regime=MarketRegime.STABLE,
-    )
+        regime=MarketRegime.STABLE,    )
     records = [
         PredictionRecord(contract_ticker="KXBTC15M-COHORT-A", brti_cohort="AGREE_UP",
                          brti_side_at_lock="UP", spot_side_at_lock="UP", **base),
@@ -1498,7 +1493,6 @@ def test_order_book_source_mismatch_degrades_and_recovers_prediction(tmp_path):
     hub.ingest_trade(now, 90012.0, 0.2, False, "COINBASE_FALLBACK")
     statuses = {item.name: item.status for item in hub.get_feed_statuses()}
     assert statuses["Order Book Depth"] == "SOURCE_MISMATCH"
-
     orchestrator = PredictorOrchestrator(
         hub, PredictionLedger()
     )
@@ -1747,8 +1741,7 @@ def test_database_reopen_preserves_predictions_trades_and_scoreboard(tmp_path):
     first.record_prediction(_prediction_record(ticker, final=Signal.UP))
     first.record_trade(TradeRecord(
         mode="paper", contract_ticker=ticker,
-        timestamp_iso="2026-11-18 00:00:00 UTC", side="YES",
-        contracts=2, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
+        timestamp_iso="2026-11-18 00:00:00 UTC", side="YES",        contracts=2, entry_price=0.20, quote_source="KALSHI_LIVE_BOOK",
         fee_paid=0.02, fair_prob_at_entry=0.70, net_edge=0.49,
         status="OPEN", notes="Restart persistence verification",
     ))
@@ -1896,3 +1889,29 @@ def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
     assert health["storage_status"] == storage_status
     assert health["storage_integrity_check"] == integrity
     assert health["storage"] == storage
+
+
+def test_feed_status_reports_worker_uptime_and_cached_brti_age():
+    now = time.time()
+    hub = MarketDataHub()
+    hub._feed_runtime["BRTI Feed Worker"].update({
+        "state": "RESTARTING",
+        "restart_count": 2,
+        "started_ts": now - 45.0,
+        "last_error": "test disconnect",
+    })
+    hub.brti_status = "LIVE"
+    hub.official_brti_price = 90123.45
+    hub.last_brti_ts = now - 37.0
+    hub.brti_detail = "BRTI stream reconnecting: test disconnect"
+
+    statuses = {item.name: item for item in hub.get_feed_statuses()}
+    worker = statuses["BRTI Feed Worker"]
+    brti = statuses["CF Benchmarks BRTI"]
+
+    assert worker.last_updated_iso is None
+    assert worker.age_seconds is None
+    assert "worker uptime=45." in worker.detail
+    assert "cached official BRTI value=90123.45" in brti.detail
+    assert "last tick age=37." in brti.detail
+    assert "(not a new tick)" in brti.detail
