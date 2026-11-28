@@ -247,7 +247,8 @@ class MarketDataHub:
         self.active_spot_source = source
         self.trades.append((ts, price, qty, is_buyer_maker))
         if self._current_sec == 0:
-            self._current_sec = sec            self._current_sec_last_price = price
+            self._current_sec = sec
+            self._current_sec_last_price = price
             self._current_sec_vol = qty
         elif sec > self._current_sec:
             # Close the prior second with its own final trade, not the first
@@ -496,7 +497,8 @@ class MarketDataHub:
                 now = time.monotonic()
                 if not use_coinbase:
                     # Any primary failure triggers fallback; once the fallback
-                    # session ends, immediately retry primary on the next cycle.                    use_coinbase = True
+                    # session ends, immediately retry primary on the next cycle.
+                    use_coinbase = True
                     next_primary_retry = now
                 else:
                     use_coinbase = False
@@ -745,7 +747,8 @@ class MarketDataHub:
         exception_name = type(exc).__name__
         if exception_name == "ConnectionTimeoutError":
             phase = "connection establishment"
-        elif exception_name == "SocketTimeoutError":            phase = "socket read"
+        elif exception_name == "SocketTimeoutError":
+            phase = "socket read"
         elif isinstance(exc, asyncio.TimeoutError):
             phase = "overall request timeout or unclassified timeout"
         elif isinstance(exc, aiohttp.ClientConnectorError):
@@ -944,7 +947,12 @@ class MarketDataHub:
         ]
         for name, runtime in self._feed_runtime.items():
             if runtime.get("restart_count", 0) or runtime.get("state") not in (None, "STOPPED"):
-                detail = f"worker state={runtime.get('state')}; worker uptime={age:.2f}s" if (age := safe_age_seconds(runtime.get("started_ts"), now)) is not None else f"worker state={runtime.get('state')}; uptime unavailable"
+                age = safe_age_seconds(runtime.get("started_ts"), now)
+                detail = (
+                    f"worker state={runtime.get('state')}; worker uptime={age:.2f}s"
+                    if age is not None
+                    else f"worker state={runtime.get('state')}; uptime unavailable"
+                )
                 detail += f"; restarts={runtime.get('restart_count', 0)}"
                 if runtime.get("last_error"):
                     detail += f"; last_error={runtime['last_error']}"
