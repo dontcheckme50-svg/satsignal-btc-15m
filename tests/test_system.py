@@ -1896,3 +1896,29 @@ def test_process_health_exposes_storage_diagnostics_without_failing_liveness(
     assert health["storage_status"] == storage_status
     assert health["storage_integrity_check"] == integrity
     assert health["storage"] == storage
+
+
+def test_feed_status_reports_worker_uptime_and_cached_brti_age():
+    now = time.time()
+    hub = MarketDataHub()
+    hub._feed_runtime["BRTI Feed Worker"].update({
+        "state": "RESTARTING",
+        "restart_count": 2,
+        "started_ts": now - 45.0,
+        "last_error": "test disconnect",
+    })
+    hub.brti_status = "LIVE"
+    hub.official_brti_price = 90123.45
+    hub.last_brti_ts = now - 37.0
+    hub.brti_detail = "BRTI stream reconnecting: test disconnect"
+
+    statuses = {item.name: item for item in hub.get_feed_statuses()}
+    worker = statuses["BRTI Feed Worker"]
+    brti = statuses["CF Benchmarks BRTI"]
+
+    assert worker.last_updated_iso is None
+    assert worker.age_seconds is None
+    assert "worker uptime=45." in worker.detail
+    assert "cached official BRTI value=90123.45" in brti.detail
+    assert "last tick age=37." in brti.detail
+    assert "(not a new tick)" in brti.detail

@@ -927,17 +927,34 @@ class MarketDataHub:
         elif brti_status == "LIVE" and self.brti_status != "LIVE":
             brti_status = self.brti_status
 
+        brti_detail = self.brti_detail
+        if "reconnect" in brti_detail.lower() or "waiting for first tick" in brti_detail.lower():
+            if self.last_brti_ts > 0 and self.official_brti_price is not None:
+                cached_age = safe_age_seconds(self.last_brti_ts, now)
+                if cached_age is not None:
+                    brti_detail += (
+                        f"; cached official BRTI value={self.official_brti_price:.2f}; "
+                        f"last tick age={cached_age:.2f}s (not a new tick)"
+                    )
+            else:
+                brti_detail += "; no prior official BRTI tick cached"
+
         statuses = [
             FeedStatus(name="Primary Spot Feed", status=spot_status, last_updated_iso=iso_now(self.last_spot_ts) if self.last_spot_ts > 0 else None, age_seconds=round(spot_age, 2) if spot_age is not None else None, detail=self.active_spot_source),
             FeedStatus(name="Order Book Depth", status=book_status, last_updated_iso=iso_now(self.last_book_ts) if self.last_book_ts > 0 else None, age_seconds=round(book_age, 2) if book_age is not None else None, detail=f"{len(self.bids)} bid / {len(self.asks)} ask levels; source={self.last_book_source}"),
             FeedStatus(name="Kalshi KXBTC15M", status=kalshi_status, last_updated_iso=iso_now(self.last_kalshi_ts) if self.last_kalshi_ts > 0 else None, age_seconds=round(kalshi_age, 2) if kalshi_age is not None else None, detail=self.kalshi_status_detail),
-            FeedStatus(name="CF Benchmarks BRTI", status=brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts > 0 else None, age_seconds=round(brti_age, 2) if brti_age is not None else None, detail=self.brti_detail),
+            FeedStatus(name="CF Benchmarks BRTI", status=brti_status, last_updated_iso=iso_now(self.last_brti_ts) if self.last_brti_ts > 0 else None, age_seconds=round(brti_age, 2) if brti_age is not None else None, detail=brti_detail),
         ]
         for name, runtime in self._feed_runtime.items():
             if runtime.get("restart_count", 0) or runtime.get("state") not in (None, "STOPPED"):
-                detail = f"state={runtime.get('state')}; restarts={runtime.get('restart_count', 0)}"
+                age = safe_age_seconds(runtime.get("started_ts"), now)
+                detail = (
+                    f"worker state={runtime.get('state')}; worker uptime={age:.2f}s"
+                    if age is not None
+                    else f"worker state={runtime.get('state')}; uptime unavailable"
+                )
+                detail += f"; restarts={runtime.get('restart_count', 0)}"
                 if runtime.get("last_error"):
                     detail += f"; last_error={runtime['last_error']}"
-                age = safe_age_seconds(runtime.get("started_ts"), now)
-                statuses.append(FeedStatus(name=name, status=runtime.get("state", "STOPPED"), last_updated_iso=iso_now(runtime["started_ts"]) if runtime.get("started_ts") else None, age_seconds=round(age, 2) if age is not None else None, detail=detail))
+                statuses.append(FeedStatus(name=name, status=runtime.get("state", "STOPPED"), last_updated_iso=None, age_seconds=None, detail=detail))
         return statuses
