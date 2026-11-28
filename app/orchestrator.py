@@ -121,6 +121,30 @@ class PredictorOrchestrator:
             "btc_price_at_lock": ev.live_price,
         })
 
+    def _maybe_record_early_prediction(self, contract: ContractInfo, early, inputs_fresh: bool,
+                                        now: float, record_to_db: bool) -> Optional[int]:
+        """Capture one early forecast near the end of the defined early window."""
+        if not record_to_db or not inputs_fresh:
+            return None
+        if not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
+            return None
+        elapsed = max(0.0, 900.0 - float(contract.seconds_remaining))
+        # Capture at the 5-minute early-window checkpoint, allowing one minute
+        # for cycle jitter/restarts. Never substitute the late official lock.
+        if not (settings.early_window_seconds <= elapsed <= settings.early_window_seconds + 60.0):
+            return None
+        return self.ledger.record_early_prediction(
+            contract_ticker=contract.ticker,
+            timestamp_iso=iso_now(now),
+            epoch_ts=now,
+            seconds_remaining=round(contract.seconds_remaining, 1),
+            strike_price=contract.strike_price,
+            signal=early.signal.value,
+            confidence=early.confidence,
+            up_prob=early.up_prob,
+            down_prob=early.down_prob,
+        )
+
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
 
@@ -286,6 +310,9 @@ class PredictorOrchestrator:
         )
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
+        self._maybe_record_early_prediction(
+            new_contract, early, engine_inputs_fresh, ts, record_to_db
+        )
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
         # Engine F is an independent forecast; it does not alter Engine E's
         # official prediction lock or the paper execution decision.
