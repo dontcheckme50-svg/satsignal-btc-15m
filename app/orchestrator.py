@@ -25,6 +25,7 @@ class PredictorOrchestrator:
         self._engine_f_lock_candidate_ticker: Optional[str] = None
         self._engine_f_lock_candidate: Signal = Signal.WAIT
         self._engine_f_lock_candidate_count: int = 0
+        self._early_prediction_recorded_ticker: Optional[str] = None
         self.active_contract: Optional[ContractInfo] = None
         # A directional lock requires two consecutive one-second decisions
         # for the same official contract and direction.
@@ -120,6 +121,34 @@ class PredictorOrchestrator:
             "strike_price": contract.strike_price,
             "btc_price_at_lock": ev.live_price,
         })
+
+    def _maybe_record_early_prediction(self, contract: ContractInfo, early, inputs_fresh: bool,
+                                        now: float, record_to_db: bool) -> Optional[int]:
+        """Capture one early forecast near the end of the defined early window."""
+        if not record_to_db or not inputs_fresh:
+            return None
+        if not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
+            return None
+        if getattr(self, "_early_prediction_recorded_ticker", None) == contract.ticker:
+            return None
+        elapsed = max(0.0, 900.0 - float(contract.seconds_remaining))
+        # Capture in the final minute of the defined 5-minute early window.
+        # This keeps the stored forecast inside the window whose active flag is true.
+        if not (max(0.0, settings.early_window_seconds - 60.0) <= elapsed <= settings.early_window_seconds):
+            return None
+        result = self.ledger.record_early_prediction(
+            contract_ticker=contract.ticker,
+            timestamp_iso=iso_now(now),
+            epoch_ts=now,
+            seconds_remaining=round(contract.seconds_remaining, 1),
+            strike_price=contract.strike_price,
+            signal=early.signal.value,
+            confidence=early.confidence,
+            up_prob=early.up_prob,
+            down_prob=early.down_prob,
+        )
+        self._early_prediction_recorded_ticker = contract.ticker
+        return result
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
@@ -286,6 +315,9 @@ class PredictorOrchestrator:
         )
         regime = self.regime_engine.analyze(ev, weakness, observed_bars)
         early = self.early_engine.analyze(ev, weakness, new_contract)
+        self._maybe_record_early_prediction(
+            new_contract, early, engine_inputs_fresh, ts, record_to_db
+        )
         final = self.final_engine.decide(ev, weakness, regime, early, new_contract, self.ledger.get_engine_weights())
         # Engine F is an independent forecast; it does not alter Engine E's
         # official prediction lock or the paper execution decision.

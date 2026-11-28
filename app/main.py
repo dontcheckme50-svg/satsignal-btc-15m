@@ -362,7 +362,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kv"><span>Predictions / Pending</span><span id="sb-total">0 / 0</span></div>
       <div class="kv"><span>Final Engine (W / L / Accuracy)</span><span id="sb-final">0 / 0 / --</span></div>
       <div class="kv"><span>Main Engine (W / L / Accuracy)</span><span id="sb-main">0 / 0 / --</span></div>
-      <div class="kv"><span>Early Engine (W / L / Accuracy)</span><span id="sb-early">0 / 0 / --</span></div>
+      <div class="kv"><span>Early Engine Checkpoint (W / L / Accuracy)</span><span id="sb-early">0 / 0 / --</span></div>
       <div class="kv"><span>Brier Calibration Score</span><span id="sb-brier">Awaiting verified settlements</span></div>
       <div class="kv"><span>Protective WAITs</span><span id="sb-waits">0</span></div>
     </div>
@@ -609,8 +609,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const res = await fetch("/api/orchestrator/health", {cache:"no-store"});
       if (!res.ok) throw new Error("Health endpoint unavailable");
       const h = await res.json();
-      systemEl.textContent = h.health || "UNKNOWN";
-      systemEl.style.color = h.health === "HEALTHY" ? "var(--up)" : (h.health === "DEGRADED" || h.health === "STOPPED" ? "var(--down)" : "var(--wait)");
+      const workerHealth = h.health || "UNKNOWN";
+      systemEl.textContent = workerHealth === "HEALTHY" && h.market_data_health !== "READY" ? "WORKER HEALTHY" : workerHealth;
+      systemEl.style.color = workerHealth === "HEALTHY" && h.market_data_health !== "READY" ? "var(--wait)" : (workerHealth === "HEALTHY" ? "var(--up)" : (workerHealth === "DEGRADED" || workerHealth === "STOPPED" ? "var(--down)" : "var(--wait)"));
       marketEl.textContent = h.market_data_health === "READY" ? "MARKET DATA READY" : "MARKET DATA DEGRADED";
       marketEl.style.color = h.market_data_health === "READY" ? "var(--up)" : "var(--wait)";
     } catch(e) {
