@@ -100,6 +100,23 @@ class PredictionLedger:
                     actual_outcome TEXT,
                     won INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS early_predictions (
+                    id BIGSERIAL PRIMARY KEY,
+                    contract_ticker TEXT NOT NULL UNIQUE,
+                    timestamp_iso TEXT NOT NULL,
+                    epoch_ts DOUBLE PRECISION NOT NULL,
+                    seconds_remaining DOUBLE PRECISION NOT NULL,
+                    strike_price DOUBLE PRECISION NOT NULL,
+                    signal TEXT NOT NULL CHECK (signal IN ('UP','DOWN','WAIT')),
+                    confidence DOUBLE PRECISION NOT NULL,
+                    up_prob DOUBLE PRECISION NOT NULL,
+                    down_prob DOUBLE PRECISION NOT NULL,
+                    settled INTEGER NOT NULL DEFAULT 0,
+                    settlement_source TEXT,
+                    settlement_price DOUBLE PRECISION,
+                    actual_outcome TEXT,
+                    won INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS prediction_observations (
                     id BIGSERIAL PRIMARY KEY,
                     contract_ticker TEXT NOT NULL,
@@ -312,6 +329,28 @@ class PredictionLedger:
             ).fetchone()
         return dict(row) if row else None
 
+    def record_early_prediction(self, contract_ticker: str, timestamp_iso: str, epoch_ts: float,
+                                seconds_remaining: float, strike_price: float, signal: str,
+                                confidence: float, up_prob: float, down_prob: float) -> int:
+        """Persist the one early-window snapshot per official contract, immutably."""
+        with self._connection() as conn:
+            conn.execute(
+                """INSERT INTO early_predictions (
+                    contract_ticker, timestamp_iso, epoch_ts, seconds_remaining,
+                    strike_price, signal, confidence, up_prob, down_prob
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (contract_ticker) DO NOTHING""",
+                (contract_ticker, timestamp_iso, epoch_ts, seconds_remaining,
+                 strike_price, signal, confidence, up_prob, down_prob),
+            )
+            row = conn.execute(
+                "SELECT id FROM early_predictions WHERE contract_ticker = ?",
+                (contract_ticker,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Early prediction could not be verified after insert")
+        return int(row["id"])
+
     def record_prediction(self, rec: PredictionRecord) -> int:
         """Persist the one official scored prediction for a contract, idempotently."""
         with self._connection() as conn:
@@ -501,6 +540,11 @@ class PredictionLedger:
                        FROM forecast_locks
                        WHERE settled = 0 AND contract_ticker LIKE 'KXBTC15M%'
                        GROUP BY contract_ticker
+                       UNION ALL
+                       SELECT contract_ticker, MIN(epoch_ts) AS first_seen
+                       FROM early_predictions
+                       WHERE settled = 0 AND contract_ticker LIKE 'KXBTC15M%'
+                       GROUP BY contract_ticker
                    )
                    SELECT contract_ticker, MIN(first_seen) AS first_seen
                    FROM pending
@@ -567,6 +611,23 @@ class PredictionLedger:
                        WHERE contract_ticker = ? AND settled = 0""",
                     (settlement_source, settlement_price, outcome, won, contract_ticker),
                 )
+
+            early_rows = conn.execute(
+                "SELECT * FROM early_predictions WHERE contract_ticker = ? AND settled = 0",
+                (contract_ticker,),
+            ).fetchall()
+            for early_row in early_rows:
+                outcome = official_result if official_result in ("UP", "DOWN") else (
+                    "UP" if settlement_price >= float(early_row["strike_price"]) else "DOWN"
+                )
+                won = None if early_row["signal"] == "WAIT" else int(early_row["signal"] == outcome)
+                conn.execute(
+                    """UPDATE early_predictions SET settled = 1, settlement_source = ?,
+                       settlement_price = ?, actual_outcome = ?, won = ?
+                       WHERE contract_ticker = ? AND settled = 0""",
+                    (settlement_source, settlement_price, outcome, won, contract_ticker),
+                )
+                updated += 1
 
             open_trades = conn.execute("SELECT * FROM trades WHERE contract_ticker = ? AND status = 'OPEN'", (contract_ticker,)).fetchall()
             for tr in open_trades:
@@ -642,7 +703,14 @@ class PredictionLedger:
                 return len(vals), wins, losses, round((wins / len(vals)) * 100.0, 2)
             f_n, f_wins, f_losses, f_acc = calc_acc("final_won")
             m_n, m_wins, m_losses, m_acc = calc_acc("main_won")
-            e_n, e_wins, e_losses, e_acc = calc_acc("early_won")
+            early_rows = conn.execute(
+                """SELECT signal, won FROM early_predictions
+                   WHERE settled = 1 AND signal IN ('UP','DOWN') AND won IS NOT NULL"""
+            ).fetchall()
+            e_n = len(early_rows)
+            e_wins = sum(int(row["won"]) for row in early_rows)
+            e_losses = e_n - e_wins
+            e_acc = round(e_wins / e_n * 100.0, 2) if e_n else 0.0
             brier_vals = [(float(r["up_prob"]) - (1.0 if r["actual_outcome"] == "UP" else 0.0)) ** 2 for r in settled_rows if r["actual_outcome"] in ("UP", "DOWN")]
             brier = round(sum(brier_vals) / len(brier_vals), 4) if brier_vals else None
             trade_stats = conn.execute("SELECT COUNT(*) AS cnt, COALESCE(SUM(pnl_usd), 0.0) AS pnl FROM trades WHERE status != 'REJECTED'").fetchone()
