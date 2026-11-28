@@ -25,6 +25,7 @@ class PredictorOrchestrator:
         self._engine_f_lock_candidate_ticker: Optional[str] = None
         self._engine_f_lock_candidate: Signal = Signal.WAIT
         self._engine_f_lock_candidate_count: int = 0
+        self._early_prediction_recorded_ticker: Optional[str] = None
         self.active_contract: Optional[ContractInfo] = None
         # A directional lock requires two consecutive one-second decisions
         # for the same official contract and direction.
@@ -128,12 +129,14 @@ class PredictorOrchestrator:
             return None
         if not contract.is_official_kalshi or contract.strike_source != "KALSHI_OFFICIAL":
             return None
-        elapsed = max(0.0, 900.0 - float(contract.seconds_remaining))
-        # Capture at the 5-minute early-window checkpoint, allowing one minute
-        # for cycle jitter/restarts. Never substitute the late official lock.
-        if not (settings.early_window_seconds <= elapsed <= settings.early_window_seconds + 60.0):
+        if getattr(self, "_early_prediction_recorded_ticker", None) == contract.ticker:
             return None
-        return self.ledger.record_early_prediction(
+        elapsed = max(0.0, 900.0 - float(contract.seconds_remaining))
+        # Capture in the final minute of the defined 5-minute early window.
+        # This keeps the stored forecast inside the window whose active flag is true.
+        if not (max(0.0, settings.early_window_seconds - 60.0) <= elapsed <= settings.early_window_seconds):
+            return None
+        result = self.ledger.record_early_prediction(
             contract_ticker=contract.ticker,
             timestamp_iso=iso_now(now),
             epoch_ts=now,
@@ -144,6 +147,8 @@ class PredictorOrchestrator:
             up_prob=early.up_prob,
             down_prob=early.down_prob,
         )
+        self._early_prediction_recorded_ticker = contract.ticker
+        return result
 
     def register_listener(self, cb: Callable[[DashboardSnapshot], None]) -> None:
         self._listeners.append(cb)
