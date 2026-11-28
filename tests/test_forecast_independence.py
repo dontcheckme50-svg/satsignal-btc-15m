@@ -367,3 +367,34 @@ def test_early_prediction_capture_rejects_stale_or_late_inputs():
     ) is None
     assert ledger.rows == []
 
+def test_early_checkpoint_is_queued_and_graded_separately_from_final_lock():
+    ledger = PredictionLedger()
+    ticker = "KXBTC15M-EARLY-GRADE-" + uuid.uuid4().hex[:10]
+    ledger.record_early_prediction(
+        contract_ticker=ticker,
+        timestamp_iso="2026-11-24 12:05:00 UTC",
+        epoch_ts=1795541100.0,
+        seconds_remaining=600.0,
+        strike_price=100000.0,
+        signal="DOWN",
+        confidence=62.0,
+        up_prob=0.38,
+        down_prob=0.62,
+    )
+
+    assert ticker in ledger.get_unsettled_contract_tickers()
+    ledger.settle_contract(
+        ticker, settlement_price=None, official_result="UP",
+        settlement_source="KALSHI_VERIFIED",
+    )
+    with ledger._connection() as conn:
+        row = conn.execute(
+            "SELECT settled, actual_outcome, won, settlement_source FROM early_predictions WHERE contract_ticker = ?",
+            (ticker,),
+        ).fetchone()
+
+    assert row["settled"] == 1
+    assert row["actual_outcome"] == "UP"
+    assert row["won"] == 0
+    assert row["settlement_source"] == "KALSHI_VERIFIED"
+
