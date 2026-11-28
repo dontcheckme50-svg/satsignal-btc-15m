@@ -319,3 +319,51 @@ def test_engine_f_lock_is_in_settlement_queue_and_graded_by_verified_outcome():
     assert lock["won"] == 1
     assert lock["settlement_source"] == "KALSHI_VERIFIED"
 
+class _EarlyPredictionLedger:
+    def __init__(self):
+        self.rows = []
+
+    def record_early_prediction(self, **row):
+        self.rows.append(row)
+        return len(self.rows)
+
+
+def test_early_prediction_is_captured_at_early_checkpoint_not_late_lock():
+    ledger = _EarlyPredictionLedger()
+    orchestrator = object.__new__(PredictorOrchestrator)
+    orchestrator.ledger = ledger
+    report = EarlyPredictionReport(
+        active_window=False, signal=Signal.DOWN, confidence=61.0,
+        up_prob=0.39, down_prob=0.61, rationale="early checkpoint",
+    )
+    c = contract().model_copy(update={"seconds_remaining": 600.0})
+
+    result = orchestrator._maybe_record_early_prediction(
+        c, report, inputs_fresh=True, now=1_800_000_300.0, record_to_db=True
+    )
+
+    assert result == 1
+    assert len(ledger.rows) == 1
+    assert ledger.rows[0]["signal"] == "DOWN"
+    assert ledger.rows[0]["seconds_remaining"] == 600.0
+
+
+def test_early_prediction_capture_rejects_stale_or_late_inputs():
+    ledger = _EarlyPredictionLedger()
+    orchestrator = object.__new__(PredictorOrchestrator)
+    orchestrator.ledger = ledger
+    report = EarlyPredictionReport(
+        active_window=False, signal=Signal.UP, confidence=65.0,
+        up_prob=0.65, down_prob=0.35, rationale="test",
+    )
+
+    assert orchestrator._maybe_record_early_prediction(
+        contract().model_copy(update={"seconds_remaining": 600.0}),
+        report, inputs_fresh=False, now=1_800_000_300.0, record_to_db=True
+    ) is None
+    assert orchestrator._maybe_record_early_prediction(
+        contract().model_copy(update={"seconds_remaining": 65.0}),
+        report, inputs_fresh=True, now=1_800_000_835.0, record_to_db=True
+    ) is None
+    assert ledger.rows == []
+
